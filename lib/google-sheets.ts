@@ -233,7 +233,7 @@ function parseCSVToAllPricing(csvText: string): RoofTypePricing {
       if (isNaN(multiplier)) multiplier = null
       cost = parseDollarAmount(colD)
     } else {
-      cost = parseDollarAmount(colC)
+      cost = parseDollarAmount(colC) ?? parseDollarAmount(colD)
       multiplier = extractMultiplierFromDescription(description)
         ?? knownMultipliers.get(itemName)
         ?? findMapping(itemName, currentCategory)?.multiplier
