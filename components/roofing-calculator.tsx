@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -401,26 +401,7 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
                 </div>
               </CardHeader>
               <CardContent className="flex flex-col gap-6">
-                <div className="flex flex-col gap-1">
-                  <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                    Pricing Breakdown
-                  </h3>
-                  <div className="flex flex-col gap-0.5">
-                    <ExpandableSummaryRow label="Squares" value={calculations.squares} items={breakdown.squareRate} />
-                    <ExpandableSummaryRow label="Ridge" value={calculations.ridge} items={breakdown.ridgeRate} />
-                    <ExpandableSummaryRow label="Hip" value={calculations.hip} items={breakdown.hipRate} />
-                    <ExpandableSummaryRow label="Eaves" value={calculations.eave} items={breakdown.eaveRate} />
-                    <ExpandableSummaryRow label="Rakes" value={calculations.rake} items={breakdown.rakeRate} />
-                    <ExpandableSummaryRow label="Valleys" value={calculations.valleys} items={breakdown.valleyRate} />
-                    <ExpandableSummaryRow label="Wall Flashing" value={calculations.wallFlashing} items={breakdown.wallFlashingRate} />
-                    <ExpandableSummaryRow label="Step Flashing" value={calculations.stepFlashing} items={breakdown.stepFlashingRate} />
-                    <ExpandableSummaryRow label="Pitch Changes" value={calculations.pitchChange} items={breakdown.pitchChangeRate} />
-                    <ExpandableSummaryRow label="Pipe Flashing" value={calculations.pipeFlashing} items={breakdown.pipeFlashingRate} />
-                    <ExpandableSummaryRow label="Ventilation" value={calculations.ventilation} items={breakdown.ventilationRate} />
-                    <ExpandableSummaryRow label="Snow Retention" value={calculations.snowRetention} items={breakdown.snowRetentionRate} />
-                    <ExpandableSummaryRow label="Misc Materials" value={calculations.miscFixedCost} items={breakdown.miscFixedCost} />
-                  </div>
-                </div>
+                <BreakdownSection calculations={calculations} breakdown={breakdown} />
 
                 <Separator />
 
@@ -478,16 +459,101 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
   )
 }
 
+function BreakdownSection({
+  calculations,
+  breakdown,
+}: {
+  calculations: Record<string, number>
+  breakdown: PricingBreakdown
+}) {
+  const [allExpanded, setAllExpanded] = useState(false)
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
+
+  const toggle = useCallback((key: string) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
+  const toggleAll = useCallback(() => {
+    const nextState = !allExpanded
+    setAllExpanded(nextState)
+    if (nextState) {
+      const allKeys = rows.map((r) => r.key).filter((k) => {
+        const items = breakdown[k as keyof PricingBreakdown]
+        return items && items.length > 0
+      })
+      setExpandedKeys(new Set(allKeys))
+    } else {
+      setExpandedKeys(new Set())
+    }
+  }, [allExpanded, breakdown])
+
+  const rows: { key: string; label: string; calcKey: string }[] = [
+    { key: "squareRate", label: "Squares", calcKey: "squares" },
+    { key: "ridgeRate", label: "Ridge", calcKey: "ridge" },
+    { key: "hipRate", label: "Hip", calcKey: "hip" },
+    { key: "eaveRate", label: "Eaves", calcKey: "eave" },
+    { key: "rakeRate", label: "Rakes", calcKey: "rake" },
+    { key: "valleyRate", label: "Valleys", calcKey: "valleys" },
+    { key: "wallFlashingRate", label: "Wall Flashing", calcKey: "wallFlashing" },
+    { key: "stepFlashingRate", label: "Step Flashing", calcKey: "stepFlashing" },
+    { key: "pitchChangeRate", label: "Pitch Changes", calcKey: "pitchChange" },
+    { key: "pipeFlashingRate", label: "Pipe Flashing", calcKey: "pipeFlashing" },
+    { key: "ventilationRate", label: "Ventilation", calcKey: "ventilation" },
+    { key: "snowRetentionRate", label: "Snow Retention", calcKey: "snowRetention" },
+    { key: "miscFixedCost", label: "Misc Materials", calcKey: "miscFixedCost" },
+  ]
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+          Pricing Breakdown
+        </h3>
+        <button
+          type="button"
+          onClick={toggleAll}
+          className="text-xs text-muted-foreground/70 hover:text-muted-foreground transition-colors cursor-pointer"
+        >
+          {allExpanded ? "Collapse all" : "Expand all"}
+        </button>
+      </div>
+      <div className="flex flex-col gap-0.5">
+        {rows.map((row) => (
+          <ExpandableSummaryRow
+            key={row.key}
+            rateKey={row.key}
+            label={row.label}
+            value={calculations[row.calcKey]}
+            items={breakdown[row.key as keyof PricingBreakdown]}
+            expanded={expandedKeys.has(row.key)}
+            onToggle={toggle}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ExpandableSummaryRow({
+  rateKey,
   label,
   value,
   items,
+  expanded,
+  onToggle,
 }: {
+  rateKey: string
   label: string
   value: number
   items?: LineItemDetail[]
+  expanded: boolean
+  onToggle: (key: string) => void
 }) {
-  const [expanded, setExpanded] = useState(false)
   const hasItems = items && items.length > 0
 
   const formatCurrency = (v: number) =>
@@ -501,7 +567,7 @@ function ExpandableSummaryRow({
     <div>
       <button
         type="button"
-        onClick={() => hasItems && setExpanded(!expanded)}
+        onClick={() => hasItems && onToggle(rateKey)}
         className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors ${
           hasItems ? "hover:bg-muted/50 cursor-pointer" : "cursor-default"
         } ${expanded ? "bg-muted/50" : ""}`}
