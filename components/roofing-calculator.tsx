@@ -9,10 +9,8 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import {
   Ruler,
-  Calculator,
   DollarSign,
   RotateCcw,
-  Save,
   Layers,
   CircleDot,
   ChevronRight,
@@ -374,20 +372,7 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
               </CardContent>
             </Card>
 
-            <div className="flex flex-col gap-3 sm:flex-row lg:hidden">
-              <Button size="lg" className="flex-1 gap-2 bg-primary hover:bg-primary/90">
-                <Calculator className="size-4" />
-                Calculate Estimate
-              </Button>
-              <Button variant="outline" size="lg" onClick={handleReset} className="gap-2">
-                <RotateCcw className="size-4" />
-                Reset
-              </Button>
-              <Button variant="secondary" size="lg" className="gap-2">
-                <Save className="size-4" />
-                Save Quote
-              </Button>
-            </div>
+            
           </div>
 
           <div className="lg:sticky lg:top-8 lg:h-fit">
@@ -434,22 +419,10 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
                   Pricing updates dynamically based on selected roof type and entered values. Final quote may vary based on site conditions.
                 </p>
 
-                <div className="hidden flex-col gap-3 lg:flex">
-                  <Button size="lg" className="w-full gap-2 bg-primary hover:bg-primary/90">
-                    <Calculator className="size-4" />
-                    Calculate Estimate
-                  </Button>
-                  <div className="grid grid-cols-2 gap-3">
-                    <Button variant="outline" onClick={handleReset} className="gap-2">
-                      <RotateCcw className="size-4" />
-                      Reset
-                    </Button>
-                    <Button variant="secondary" className="gap-2">
-                      <Save className="size-4" />
-                      Save Quote
-                    </Button>
-                  </div>
-                </div>
+                <Button variant="outline" onClick={handleReset} className="w-full gap-2">
+                  <RotateCcw className="size-4" />
+                  Reset
+                </Button>
               </CardContent>
             </Card>
           </div>
