@@ -221,8 +221,11 @@ function parseCSVToAllPricing(csvText: string): RoofTypePricing {
       continue
     }
 
-    const typeId = SHEET_TYPE_TO_ID[typeRaw]
-    if (!typeId) continue
+    const isAll = typeRaw.toLowerCase() === "all"
+    const typeIds = isAll
+      ? Object.values(SHEET_TYPE_TO_ID)
+      : SHEET_TYPE_TO_ID[typeRaw] ? [SHEET_TYPE_TO_ID[typeRaw]] : []
+    if (typeIds.length === 0) continue
 
     const isNumericMultiplier = colC !== "" && !colC.startsWith("$")
     let multiplier: number | null = null
@@ -246,22 +249,25 @@ function parseCSVToAllPricing(csvText: string): RoofTypePricing {
     const rateKey = mapping?.rate ?? CATEGORY_TO_RATE[currentCategory]
     if (!rateKey) continue
 
-    if (!result[typeId]) {
-      result[typeId] = { rates: zeroPricing(), breakdown: {} }
-    }
-
     const lineTotal = multiplier * cost
-    result[typeId].rates[rateKey] += lineTotal
 
-    if (!result[typeId].breakdown[rateKey]) {
-      result[typeId].breakdown[rateKey] = []
+    for (const typeId of typeIds) {
+      if (!result[typeId]) {
+        result[typeId] = { rates: zeroPricing(), breakdown: {} }
+      }
+
+      result[typeId].rates[rateKey] += lineTotal
+
+      if (!result[typeId].breakdown[rateKey]) {
+        result[typeId].breakdown[rateKey] = []
+      }
+      result[typeId].breakdown[rateKey]!.push({
+        name: itemName,
+        multiplier,
+        costPerUnit: cost,
+        total: lineTotal,
+      })
     }
-    result[typeId].breakdown[rateKey]!.push({
-      name: itemName,
-      multiplier,
-      costPerUnit: cost,
-      total: lineTotal,
-    })
   }
 
   // Fill missing rates and breakdowns from Vertical Seam
