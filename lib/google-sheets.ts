@@ -91,8 +91,14 @@ const ITEM_MAPPINGS: ItemMapping[] = [
   { pattern: "Endwall flashing", rate: "stepFlashingRate", multiplier: 0.1 },
   { pattern: "Pitch Change", rate: "pitchChangeRate", multiplier: 0.1 },
   { pattern: "Pipe flashing up to 6", rate: "pipeFlashingRate", multiplier: 1 },
+  { pattern: "High Temp Pipe flashing up to 13", rate: "pipeFlashingRate", multiplier: 1 },
+  { pattern: "High Temp Pipe flashing up to 19", rate: "pipeFlashingRate", multiplier: 1 },
   { pattern: "Ridge Vent", rate: "ventilationRate", multiplier: 1 },
-  { pattern: "S-5-V Clamp", rate: "snowRetentionRate", multiplier: 0.75 },
+  { pattern: "S-5-V Clamp", rate: "snowRetentionRate", multiplier: 1 },
+  { pattern: "VersaClip", rate: "snowRetentionRate", multiplier: 1 },
+  { pattern: "SnoClip", rate: "snowRetentionRate", multiplier: 1 },
+  { pattern: "Snow Fence", rate: "snowRetentionRate", multiplier: 1 },
+  { pattern: "Colorgard", rate: "snowRetentionRate", multiplier: 1 },
 
   { pattern: "Flat Sheet", rate: "miscFixedCost", multiplier: 2 },
   { pattern: "Touch up Kit", rate: "miscFixedCost", multiplier: 2 },
@@ -101,10 +107,20 @@ const ITEM_MAPPINGS: ItemMapping[] = [
   { pattern: "Cap Nails", rate: "miscFixedCost", multiplier: 1 },
 ]
 
-const CATEGORY_NAMES = [
-  "Squares", "Ridges", "Eaves", "Rakes", "Valleys",
-  "Wall Flashing", "Pipe Flashing", "Misc", "Ventilation", "Snow Retention",
-]
+const CATEGORY_TO_RATE: Record<string, keyof PricingData> = {
+  "Squares": "squareRate",
+  "Ridges": "ridgeRate",
+  "Eaves": "eaveRate",
+  "Rakes": "rakeRate",
+  "Valleys": "valleyRate",
+  "Wall Flashing": "wallFlashingRate",
+  "Pipe Flashing": "pipeFlashingRate",
+  "Misc": "miscFixedCost",
+  "Ventilation": "ventilationRate",
+  "Snow Retention": "snowRetentionRate",
+}
+
+const CATEGORY_NAMES = Object.keys(CATEGORY_TO_RATE)
 
 const SKIP_CATEGORIES = ["Dumpster Fee", "Sub Labor"]
 
@@ -227,19 +243,20 @@ function parseCSVToAllPricing(csvText: string): RoofTypePricing {
     if (multiplier === null || cost === null) continue
 
     const mapping = findMapping(itemName, currentCategory)
-    if (!mapping) continue
+    const rateKey = mapping?.rate ?? CATEGORY_TO_RATE[currentCategory]
+    if (!rateKey) continue
 
     if (!result[typeId]) {
       result[typeId] = { rates: zeroPricing(), breakdown: {} }
     }
 
     const lineTotal = multiplier * cost
-    result[typeId].rates[mapping.rate] += lineTotal
+    result[typeId].rates[rateKey] += lineTotal
 
-    if (!result[typeId].breakdown[mapping.rate]) {
-      result[typeId].breakdown[mapping.rate] = []
+    if (!result[typeId].breakdown[rateKey]) {
+      result[typeId].breakdown[rateKey] = []
     }
-    result[typeId].breakdown[mapping.rate]!.push({
+    result[typeId].breakdown[rateKey]!.push({
       name: itemName,
       multiplier,
       costPerUnit: cost,
@@ -269,8 +286,7 @@ export async function fetchSheetPricing(
   gid: string
 ): Promise<RoofTypePricing> {
   const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`
-  const isDev = process.env.NODE_ENV === "development"
-  const response = await fetch(url, isDev ? { cache: "no-store" } : { next: { revalidate: 300 } })
+  const response = await fetch(url, { cache: "no-store" })
 
   if (!response.ok) {
     throw new Error(`Google Sheets fetch failed: ${response.status}`)
