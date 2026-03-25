@@ -73,13 +73,11 @@ const ITEM_MAPPINGS: ItemMapping[] = [
   { pattern: '1" Clip Screws', rate: "squareRate", multiplier: 100 },
   { pattern: "Panel Clips", rate: "squareRate", multiplier: 25 },
   { pattern: "Panel Screws", rate: "squareRate", multiplier: 100 },
-  { pattern: "Pop Rivets", rate: "squareRate", multiplier: 10 },
 
   { pattern: "Ridge Cap", rate: "ridgeRate", multiplier: 0.1 },
   { pattern: "Z Trim for ridge", rate: "ridgeRate", multiplier: 0.2 },
-
-  { pattern: "Preform Hip Cap", rate: "hipRate", multiplier: 0.1 },
-  { pattern: "Hip Cap", rate: "hipRate", multiplier: 0.1 },
+  { pattern: "Preform Hip Cap", rate: "ridgeRate", multiplier: 0.1 },
+  { pattern: "Hip", rate: "ridgeRate", multiplier: 0.1 },
 
   { pattern: "Extended Eave Trim", rate: "eaveRate", multiplier: 0.1 },
   { category: "Eaves", pattern: "High Temp Ice and Water Shield", rate: "eaveRate", multiplier: 2 / 60 },
@@ -98,6 +96,7 @@ const ITEM_MAPPINGS: ItemMapping[] = [
 
   { pattern: "Flat Sheet", rate: "miscFixedCost", multiplier: 2 },
   { pattern: "Touch up Kit", rate: "miscFixedCost", multiplier: 2 },
+  { pattern: "Pop Rivets", rate: "miscFixedCost", multiplier: 10 },
   { pattern: "Sealant", rate: "miscFixedCost", multiplier: 5 },
   { pattern: "Cap Nails", rate: "miscFixedCost", multiplier: 1 },
 ]
