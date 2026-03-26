@@ -12,7 +12,6 @@ import {
   Ruler,
   RotateCcw,
   Layers,
-  CircleDot,
   ChevronRight,
 } from "lucide-react"
 import type { RoofTypePricing, PricingData, PricingBreakdown, LineItemDetail, FeeConfig } from "@/lib/google-sheets"
@@ -182,21 +181,13 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-3">
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl text-balance">
-                  Standing Seam Metal Roofing Calculator
+                  Roofing Calculator
                 </h1>
-                <Badge className="bg-accent text-accent-foreground border-0 hidden sm:flex">
-                  <CircleDot className="size-3 animate-pulse" />
-                  Live Estimate
-                </Badge>
               </div>
               <p className="text-muted-foreground text-sm sm:text-base text-pretty max-w-2xl">
                 Generate a fast, professional estimate for standing seam metal roofing systems.
               </p>
             </div>
-            <Badge className="bg-accent text-accent-foreground border-0 sm:hidden w-fit">
-              <CircleDot className="size-3 animate-pulse" />
-              Live Estimate
-            </Badge>
           </div>
         </div>
       </header>
@@ -253,7 +244,6 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                     id="squares"
                     value={formData.squares}
                     onChange={(v) => handleInputChange("squares", v)}
-                    helper="Total roof area (1 square = 100 sq ft)"
                   />
                   <FormField
                     label="Ridge Length"
@@ -338,7 +328,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
           </div>
 
           <div className="lg:sticky lg:top-8 lg:h-fit">
-            <Card className="border-2 shadow-lg">
+            <Card className="border-2 shadow-lg md:max-h-[calc(100vh-11rem)] md:overflow-hidden md:flex md:flex-col">
               <CardHeader className="pb-4">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-lg">Estimate Summary</CardTitle>
@@ -347,8 +337,9 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                   </Badge>
                 </div>
               </CardHeader>
-              <CardContent className="flex flex-col gap-6">
-                <BreakdownSection calculations={calculations} breakdown={breakdown} />
+              <CardContent className="flex flex-col gap-0 p-0 md:min-h-0 md:flex-1">
+                <div className="flex flex-col gap-6 px-6 pb-4 md:min-h-0 md:flex-1 md:overflow-y-auto">
+                  <BreakdownSection calculations={calculations} breakdown={breakdown} />
 
                 <Separator />
 
@@ -440,23 +431,26 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
 
                 <Separator />
 
-                <div className="rounded-xl bg-primary p-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-primary-foreground">Sale Price</span>
-                    <span className="text-2xl font-bold text-primary-foreground">
-                      {formatCurrency(calculations.salePrice)}
-                    </span>
-                  </div>
+                  <p className="text-xs text-muted-foreground text-center leading-relaxed">
+                    Pricing and fees update dynamically from the connected spreadsheet. Final quote may vary based on site conditions.
+                  </p>
+
+                  <Button variant="outline" onClick={handleReset} className="w-full gap-2">
+                    <RotateCcw className="size-4" />
+                    Reset
+                  </Button>
                 </div>
 
-                <p className="text-xs text-muted-foreground text-center leading-relaxed">
-                  Pricing and fees update dynamically from the connected spreadsheet. Final quote may vary based on site conditions.
-                </p>
-
-                <Button variant="outline" onClick={handleReset} className="w-full gap-2">
-                  <RotateCcw className="size-4" />
-                  Reset
-                </Button>
+                <div className="mt-auto border-t bg-card px-6 py-4">
+                  <div className="rounded-xl bg-primary p-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-primary-foreground">Sale Price</span>
+                      <span className="text-2xl font-bold text-primary-foreground">
+                        {formatCurrency(calculations.salePrice)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </div>
