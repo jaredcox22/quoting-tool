@@ -40,6 +40,7 @@ export interface FeeConfig {
   commissionPct: number
   financingPct: number
   salesTaxPct: number
+  goalProfitMarginPct: number
   satellite: number
   permits: number
   dumpsterTiers: DumpsterTier[]
@@ -72,6 +73,7 @@ export const defaultFeeConfig: FeeConfig = {
   commissionPct: 8,
   financingPct: 4,
   salesTaxPct: 7.5,
+  goalProfitMarginPct: 39,
   satellite: 10,
   permits: 200,
   dumpsterTiers: [
@@ -314,6 +316,8 @@ function parseCSV(csvText: string): SheetData {
         const n = parseDollarAmount(val); if (n !== null) fees.satellite = n
       } else if (lower === "permits") {
         const n = parseDollarAmount(val); if (n !== null) fees.permits = n
+      } else if (lower === "goal profit margin") {
+        const n = parsePercentage(val); if (n !== null) fees.goalProfitMarginPct = n
       }
       continue
     }

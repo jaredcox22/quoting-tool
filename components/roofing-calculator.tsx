@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
+import { Slider } from "@/components/ui/slider"
 import {
   Ruler,
   RotateCcw,
@@ -77,6 +78,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
   const [formData, setFormData] = useState<FormData>(initialFormData)
 
   const fees = feeConfig ?? defaultFeeConfig
+  const [profitMarginPct, setProfitMarginPct] = useState(fees.goalProfitMarginPct)
 
   const handleInputChange = (field: keyof FormData, value: string) => {
     const numValue = value === "" ? 0 : parseFloat(value)
@@ -86,6 +88,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
   const handleReset = () => {
     setFormData(initialFormData)
     setSelectedRoofType("vertical-seam")
+    setProfitMarginPct(fees.goalProfitMarginPct)
   }
 
   const entry = pricingByType?.[selectedRoofType]
@@ -124,12 +127,17 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     const financing = materialSubtotal * (fees.financingPct / 100)
     const salesTax = materialSubtotal * (fees.salesTaxPct / 100)
 
-    const preCommission =
+    const totalHardCosts =
       materialSubtotal + subLabor + dumpsterFee +
       fees.satellite + fees.permits + financing + salesTax
 
-    const commission = preCommission * (fees.commissionPct / 100)
-    const total = preCommission + commission
+    const marginDecimal = profitMarginPct / 100
+    const commissionDecimal = fees.commissionPct / 100
+    const divisor = 1 - marginDecimal - commissionDecimal
+
+    const salePrice = divisor > 0 ? totalHardCosts / divisor : totalHardCosts
+    const commission = salePrice * commissionDecimal
+    const profit = salePrice - totalHardCosts - commission
 
     return {
       squares,
@@ -151,11 +159,12 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       dumpsterFee,
       financing,
       salesTax,
-      preCommission,
+      totalHardCosts,
       commission,
-      total,
+      profit,
+      salePrice,
     }
-  }, [formData, pricing, fees])
+  }, [formData, pricing, fees, profitMarginPct])
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("en-US", {
@@ -371,23 +380,71 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                 <Separator />
 
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-muted-foreground">Pre-commission</span>
+                  <span className="text-sm font-medium text-muted-foreground">Total Hard Costs</span>
                   <span className="text-sm text-muted-foreground tabular-nums">
-                    {formatCurrency(calculations.preCommission)}
+                    {formatCurrency(calculations.totalHardCosts)}
                   </span>
                 </div>
-                <FeeRow
-                  label={`Commission (${formatCompactNumber(fees.commissionPct)}%)`}
-                  value={calculations.commission}
-                />
+
+                <Separator />
+
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="profitMargin" className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                      Goal Profit Margin
+                    </Label>
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        id="profitMarginInput"
+                        type="number"
+                        min={0}
+                        max={99}
+                        step={0.5}
+                        value={profitMarginPct}
+                        onChange={(e) => {
+                          const v = parseFloat(e.target.value)
+                          if (!isNaN(v) && v >= 0 && v < 100) setProfitMarginPct(v)
+                        }}
+                        className="w-20 h-8 text-right text-sm tabular-nums"
+                      />
+                      <span className="text-sm text-muted-foreground">%</span>
+                    </div>
+                  </div>
+                  <Slider
+                    id="profitMargin"
+                    min={0}
+                    max={60}
+                    step={0.5}
+                    value={[profitMarginPct]}
+                    onValueChange={([v]) => setProfitMarginPct(v)}
+                    className="w-full"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5 mt-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">
+                      Commission ({formatCompactNumber(fees.commissionPct)}%)
+                    </span>
+                    <span className="text-sm text-muted-foreground tabular-nums">
+                      {formatCurrency(calculations.commission)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">Expected Profit</span>
+                    <span className={`text-sm font-semibold tabular-nums ${calculations.profit >= 0 ? "text-green-600" : "text-red-500"}`}>
+                      {formatCurrency(calculations.profit)}
+                    </span>
+                  </div>
+                </div>
 
                 <Separator />
 
                 <div className="rounded-xl bg-primary p-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-primary-foreground">Estimated Total</span>
+                    <span className="text-sm font-medium text-primary-foreground">Sale Price</span>
                     <span className="text-2xl font-bold text-primary-foreground">
-                      {formatCurrency(calculations.total)}
+                      {formatCurrency(calculations.salePrice)}
                     </span>
                   </div>
                 </div>
