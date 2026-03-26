@@ -105,17 +105,26 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
   const breakdown: PricingBreakdown = entry.breakdown ?? {}
 
   const calculations = useMemo(() => {
+    const ridgeLength = Math.ceil(formData.ridgeLength)
+    const eaveLength = Math.ceil(formData.eaveLength)
+    const rakeLength = Math.ceil(formData.rakeLength)
+    const valleyLength = Math.ceil(formData.valleyLength)
+    const wallFlashingLength = Math.ceil(formData.wallFlashing)
+    const stepFlashingLength = Math.ceil(formData.stepFlashing)
+    const ventilationLength = Math.ceil(formData.ventilation)
+    const snowRetentionLength = Math.ceil(formData.snowRetention)
+
     const squares = formData.squares * pricing.squareRate
-    const ridge = formData.ridgeLength * pricing.ridgeRate
-    const eave = formData.eaveLength * pricing.eaveRate
-    const rake = formData.rakeLength * pricing.rakeRate
-    const valleys = formData.valleyLength * pricing.valleyRate
-    const wallFlashing = formData.wallFlashing * pricing.wallFlashingRate
-    const stepFlashing = formData.stepFlashing * pricing.stepFlashingRate
+    const ridge = ridgeLength * pricing.ridgeRate
+    const eave = eaveLength * pricing.eaveRate
+    const rake = rakeLength * pricing.rakeRate
+    const valleys = valleyLength * pricing.valleyRate
+    const wallFlashing = wallFlashingLength * pricing.wallFlashingRate
+    const stepFlashing = stepFlashingLength * pricing.stepFlashingRate
     const pitchChange = formData.pitchChange * pricing.pitchChangeRate
     const pipeFlashing = formData.pipeFlashing * pricing.pipeFlashingRate
-    const ventilation = formData.ventilation * pricing.ventilationRate
-    const snowRetention = formData.snowRetention * pricing.snowRetentionRate
+    const ventilation = ventilationLength * pricing.ventilationRate
+    const snowRetention = snowRetentionLength * pricing.snowRetentionRate
 
     const materialSubtotal =
       squares + ridge + eave + rake + valleys +
@@ -123,19 +132,22 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       ventilation + snowRetention + pricing.miscFixedCost
 
     const subLaborPanels = formData.squares * fees.subLaborPerSquare
-    const subLaborRidge = formData.ridgeLength * fees.subLaborPerRidgeFt
+    const subLaborRidge = ridgeLength * fees.subLaborPerRidgeFt
     const subLabor = subLaborPanels + subLaborRidge
 
     const dumpsterFee = fees.dumpsterTiers.find(
       (t) => formData.squares >= t.minSq && formData.squares <= t.maxSq
     )?.cost ?? 0
 
-    const financing = materialSubtotal * (fees.financingPct / 100)
     const salesTax = materialSubtotal * (fees.salesTaxPct / 100)
 
-    const totalHardCosts =
+    const preFinancingSubtotal =
       materialSubtotal + subLabor + dumpsterFee +
-      fees.satellite + fees.permits + financing + salesTax
+      fees.satellite + fees.permits + salesTax
+
+    const financing = preFinancingSubtotal * (fees.financingPct / 100)
+
+    const totalHardCosts = preFinancingSubtotal + financing
 
     const marginDecimal = profitMarginPct / 100
     const commissionDecimal = fees.commissionPct / 100
@@ -383,7 +395,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                 <Separator />
 
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-muted-foreground">Total Hard Costs</span>
+                  <span className="text-sm font-medium text-muted-foreground">Total Fees & Adjustments</span>
                   <span className="text-sm text-muted-foreground tabular-nums">
                     {formatCurrency(calculations.totalHardCosts)}
                   </span>
