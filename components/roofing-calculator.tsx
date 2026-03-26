@@ -145,22 +145,33 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       materialSubtotal + subLabor + dumpsterFee +
       fees.satellite + fees.permits + salesTax
 
-    const financing = preFinancingSubtotal * (fees.financingPct / 100)
-
-    const totalHardCosts = preFinancingSubtotal + financing
-
+    const financingDecimal = fees.financingPct / 100
     const marginDecimal = profitMarginPct / 100
     const commissionDecimal = fees.commissionPct / 100
-    const divisor = 1 - marginDecimal - commissionDecimal
+    const divisor = 1 - marginDecimal - commissionDecimal - financingDecimal
 
-    // If requested margin + commission is >= 100%, there is no finite sale price.
-    // Keep values non-misleading instead of collapsing to hard-cost fallback math.
+    // Financing, commission, and profit margin are all percentages of sale price.
+    // If they sum to >= 100%, there is no finite sale price.
     const invalidMarginTarget = divisor <= 0
-    const salePrice = invalidMarginTarget ? Number.POSITIVE_INFINITY : totalHardCosts / divisor
+    const salePrice = invalidMarginTarget ? Number.POSITIVE_INFINITY : preFinancingSubtotal / divisor
+    const financing = invalidMarginTarget ? Number.POSITIVE_INFINITY : salePrice * financingDecimal
+    const totalHardCosts = invalidMarginTarget ? Number.POSITIVE_INFINITY : preFinancingSubtotal + financing
     const commission = invalidMarginTarget ? Number.POSITIVE_INFINITY : salePrice * commissionDecimal
     const profit = invalidMarginTarget ? Number.POSITIVE_INFINITY : salePrice - totalHardCosts - commission
 
     return {
+      squaresQty: formData.squares,
+      ridgeQty: ridgeLength,
+      eaveQty: eaveLength,
+      rakeQty: rakeLength,
+      valleysQty: valleyLength,
+      wallFlashingQty: wallFlashingLength,
+      stepFlashingQty: stepFlashingLength,
+      pitchChangeQty: formData.pitchChange,
+      pipeFlashingQty: formData.pipeFlashing,
+      ventilationQty: ventilationLength,
+      snowRetentionQty: snowRetentionLength,
+      miscFixedCostQty: 1,
       squares,
       ridge,
       eave,
@@ -455,7 +466,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
 
                   {calculations.invalidMarginTarget && (
                     <p className="text-xs text-amber-600">
-                      Goal Profit Margin + Commission must be below 100%. Lower the margin target to see a valid sale price.
+                      Goal Profit Margin + Commission + Financing must be below 100%. Lower the margin target to see a valid sale price.
                     </p>
                   )}
 
@@ -580,20 +591,20 @@ function BreakdownSection({
     }
   }, [allExpanded, breakdown])
 
-  const rows: { key: string; label: string; calcKey: string }[] = [
-    { key: "squareRate", label: "Squares", calcKey: "squares" },
-    { key: "ridgeRate", label: "Ridge", calcKey: "ridge" },
+  const rows: { key: string; label: string; calcKey: string; quantityKey: string }[] = [
+    { key: "squareRate", label: "Squares", calcKey: "squares", quantityKey: "squaresQty" },
+    { key: "ridgeRate", label: "Ridge", calcKey: "ridge", quantityKey: "ridgeQty" },
     // { key: "hipRate", label: "Hip", calcKey: "hip" },
-    { key: "eaveRate", label: "Eaves", calcKey: "eave" },
-    { key: "rakeRate", label: "Rakes", calcKey: "rake" },
-    { key: "valleyRate", label: "Valleys", calcKey: "valleys" },
-    { key: "wallFlashingRate", label: "Wall Flashing", calcKey: "wallFlashing" },
-    { key: "stepFlashingRate", label: "Step Flashing", calcKey: "stepFlashing" },
-    { key: "pitchChangeRate", label: "Pitch Changes", calcKey: "pitchChange" },
-    { key: "pipeFlashingRate", label: "Pipe Flashing", calcKey: "pipeFlashing" },
-    { key: "ventilationRate", label: "Ventilation", calcKey: "ventilation" },
-    { key: "snowRetentionRate", label: "Snow Retention", calcKey: "snowRetention" },
-    { key: "miscFixedCost", label: "Misc Materials", calcKey: "miscFixedCost" },
+    { key: "eaveRate", label: "Eaves", calcKey: "eave", quantityKey: "eaveQty" },
+    { key: "rakeRate", label: "Rakes", calcKey: "rake", quantityKey: "rakeQty" },
+    { key: "valleyRate", label: "Valleys", calcKey: "valleys", quantityKey: "valleysQty" },
+    { key: "wallFlashingRate", label: "Wall Flashing", calcKey: "wallFlashing", quantityKey: "wallFlashingQty" },
+    { key: "stepFlashingRate", label: "Step Flashing", calcKey: "stepFlashing", quantityKey: "stepFlashingQty" },
+    { key: "pitchChangeRate", label: "Pitch Changes", calcKey: "pitchChange", quantityKey: "pitchChangeQty" },
+    { key: "pipeFlashingRate", label: "Pipe Flashing", calcKey: "pipeFlashing", quantityKey: "pipeFlashingQty" },
+    { key: "ventilationRate", label: "Ventilation", calcKey: "ventilation", quantityKey: "ventilationQty" },
+    { key: "snowRetentionRate", label: "Snow Retention", calcKey: "snowRetention", quantityKey: "snowRetentionQty" },
+    { key: "miscFixedCost", label: "Misc Materials", calcKey: "miscFixedCost", quantityKey: "miscFixedCostQty" },
   ]
 
   return (
@@ -617,6 +628,7 @@ function BreakdownSection({
             rateKey={row.key}
             label={row.label}
             value={Number(calculations[row.calcKey] ?? 0)}
+            quantity={Number(calculations[row.quantityKey] ?? 0)}
             items={breakdown[row.key as keyof PricingBreakdown]}
             expanded={expandedKeys.has(row.key)}
             onToggle={toggle}
@@ -631,6 +643,7 @@ function ExpandableSummaryRow({
   rateKey,
   label,
   value,
+  quantity,
   items,
   expanded,
   onToggle,
@@ -638,6 +651,7 @@ function ExpandableSummaryRow({
   rateKey: string
   label: string
   value: number
+  quantity: number
   items?: LineItemDetail[]
   expanded: boolean
   onToggle: (key: string) => void
@@ -688,9 +702,9 @@ function ExpandableSummaryRow({
                 {item.name}
               </span>
               <span className="text-muted-foreground/60 shrink-0 tabular-nums">
-                {formatCompactNumber(item.multiplier)} &times; {formatCurrency(item.costPerUnit)}
+                {formatCurrency(item.total)} &times; {formatCompactNumber(quantity)}
                 <span className="text-muted-foreground/80 font-medium ml-1">
-                  = {formatCurrency(item.total)}
+                  = {formatCurrency(item.total * quantity)}
                 </span>
               </span>
             </div>
