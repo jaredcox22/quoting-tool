@@ -30,6 +30,28 @@ export interface RoofTypePricingEntry {
 
 export type RoofTypePricing = Record<string, RoofTypePricingEntry>
 
+export interface DumpsterTier {
+  minSq: number
+  maxSq: number
+  cost: number
+}
+
+export interface FeeConfig {
+  commissionPct: number
+  financingPct: number
+  salesTaxPct: number
+  satellite: number
+  permits: number
+  dumpsterTiers: DumpsterTier[]
+  subLaborPerSquare: number
+  subLaborPerRidgeFt: number
+}
+
+export interface SheetData {
+  pricing: RoofTypePricing
+  fees: FeeConfig
+}
+
 export const defaultPricing: PricingData = {
   squareRate: 850,
   ridgeRate: 18,
@@ -44,6 +66,23 @@ export const defaultPricing: PricingData = {
   ventilationRate: 28,
   snowRetentionRate: 32,
   miscFixedCost: 0,
+}
+
+export const defaultFeeConfig: FeeConfig = {
+  commissionPct: 8,
+  financingPct: 4,
+  salesTaxPct: 7.5,
+  satellite: 10,
+  permits: 200,
+  dumpsterTiers: [
+    { minSq: 1, maxSq: 20, cost: 360 },
+    { minSq: 21, maxSq: 26, cost: 400 },
+    { minSq: 27, maxSq: 35, cost: 430 },
+    { minSq: 36, maxSq: 60, cost: 465 },
+    { minSq: 61, maxSq: 90, cost: 535 },
+  ],
+  subLaborPerSquare: 200,
+  subLaborPerRidgeFt: 0.5,
 }
 
 function zeroPricing(): PricingData {
@@ -122,7 +161,7 @@ const CATEGORY_TO_RATE: Record<string, keyof PricingData> = {
 
 const CATEGORY_NAMES = Object.keys(CATEGORY_TO_RATE)
 
-const SKIP_CATEGORIES = ["Dumpster Fee", "Sub Labor"]
+const FEE_CATEGORIES = ["Dumpster Fees", "Sub Labor", "Additional Fees"]
 
 function parseCSVRow(row: string): string[] {
   const result: string[] = []
@@ -163,6 +202,12 @@ function parseDollarAmount(value: string): number | null {
   return isNaN(num) ? null : num
 }
 
+function parsePercentage(value: string): number | null {
+  const cleaned = value.replace(/%/g, "").trim()
+  const num = parseFloat(cleaned)
+  return isNaN(num) ? null : num
+}
+
 function findMapping(itemName: string, currentCategory: string): ItemMapping | undefined {
   const trimmed = itemName.trim().toLowerCase()
   return ITEM_MAPPINGS.find((m) => {
@@ -179,9 +224,18 @@ function extractMultiplierFromDescription(description: string): number | null {
   return null
 }
 
-function parseCSVToAllPricing(csvText: string): RoofTypePricing {
+function parseDumpsterTier(label: string): { minSq: number; maxSq: number } | null {
+  const match = label.match(/^(\d+)-(\d+)\s+Squares$/i)
+  if (!match) return null
+  return { minSq: parseInt(match[1]), maxSq: parseInt(match[2]) }
+}
+
+function parseCSV(csvText: string): SheetData {
   const lines = csvText.split("\n").filter((line) => line.trim().length > 0)
 
+  const fees: FeeConfig = { ...defaultFeeConfig, dumpsterTiers: [] }
+
+  // First pass: collect numeric multipliers
   const knownMultipliers = new Map<string, number>()
   let cat = ""
   for (const line of lines) {
@@ -190,7 +244,7 @@ function parseCSVToAllPricing(csvText: string): RoofTypePricing {
     const colC = cols[2]?.trim() ?? ""
 
     if (!itemName) continue
-    if (CATEGORY_NAMES.includes(itemName) || SKIP_CATEGORIES.includes(itemName)) {
+    if (CATEGORY_NAMES.includes(itemName) || FEE_CATEGORIES.includes(itemName)) {
       cat = itemName
       continue
     }
@@ -203,6 +257,7 @@ function parseCSVToAllPricing(csvText: string): RoofTypePricing {
     }
   }
 
+  // Second pass: build pricing per roof type + parse fee categories
   const result: RoofTypePricing = {}
   let currentCategory = ""
 
@@ -216,11 +271,54 @@ function parseCSVToAllPricing(csvText: string): RoofTypePricing {
 
     if (!itemName) continue
 
-    if (CATEGORY_NAMES.includes(itemName) || SKIP_CATEGORIES.includes(itemName)) {
+    if (CATEGORY_NAMES.includes(itemName) || FEE_CATEGORIES.includes(itemName)) {
       currentCategory = itemName
       continue
     }
 
+    // Parse dumpster fee tiers
+    if (currentCategory === "Dumpster Fees") {
+      const tier = parseDumpsterTier(itemName)
+      const cost = parseDollarAmount(colD) ?? parseDollarAmount(colC)
+      if (tier && cost !== null) {
+        fees.dumpsterTiers.push({ ...tier, cost })
+      }
+      continue
+    }
+
+    // Parse sub labor rates
+    if (currentCategory === "Sub Labor") {
+      const cost = parseDollarAmount(colD) ?? parseDollarAmount(colC)
+      if (cost !== null) {
+        const lower = itemName.toLowerCase()
+        if (lower.includes("panel") || lower.includes("square")) {
+          fees.subLaborPerSquare = cost
+        } else if (lower.includes("ridge")) {
+          fees.subLaborPerRidgeFt = cost
+        }
+      }
+      continue
+    }
+
+    // Parse additional fees (Commission, Financing, Satellite, Permits, Sales Tax)
+    if (currentCategory === "Additional Fees") {
+      const lower = itemName.toLowerCase()
+      const val = description || colC
+      if (lower === "commission") {
+        const n = parsePercentage(val); if (n !== null) fees.commissionPct = n
+      } else if (lower === "financing") {
+        const n = parsePercentage(val); if (n !== null) fees.financingPct = n
+      } else if (lower === "sales tax") {
+        const n = parsePercentage(val); if (n !== null) fees.salesTaxPct = n
+      } else if (lower === "satellite") {
+        const n = parseDollarAmount(val); if (n !== null) fees.satellite = n
+      } else if (lower === "permits") {
+        const n = parseDollarAmount(val); if (n !== null) fees.permits = n
+      }
+      continue
+    }
+
+    // Normal material items
     const isAll = typeRaw.toLowerCase() === "all"
     const typeIds = isAll
       ? Object.values(SHEET_TYPE_TO_ID)
@@ -284,13 +382,16 @@ function parseCSVToAllPricing(csvText: string): RoofTypePricing {
     }
   }
 
-  return result
+  // Sort dumpster tiers by minSq
+  fees.dumpsterTiers.sort((a, b) => a.minSq - b.minSq)
+
+  return { pricing: result, fees }
 }
 
-export async function fetchSheetPricing(
+export async function fetchSheetData(
   sheetId: string,
   gid: string
-): Promise<RoofTypePricing> {
+): Promise<SheetData> {
   const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`
   const response = await fetch(url, { cache: "no-store" })
 
@@ -299,22 +400,28 @@ export async function fetchSheetPricing(
   }
 
   const csvText = await response.text()
-  return parseCSVToAllPricing(csvText)
+  return parseCSV(csvText)
 }
 
-export async function getPricing(): Promise<RoofTypePricing> {
+export async function getSheetData(): Promise<SheetData> {
   const sheetId = process.env.GOOGLE_SHEET_ID
   const gid = process.env.GOOGLE_SHEET_GID
 
   if (!sheetId || !gid) {
-    console.warn("Google Sheet config missing, using default pricing")
-    return { "vertical-seam": { rates: defaultPricing, breakdown: {} } }
+    console.warn("Google Sheet config missing, using defaults")
+    return {
+      pricing: { "vertical-seam": { rates: defaultPricing, breakdown: {} } },
+      fees: defaultFeeConfig,
+    }
   }
 
   try {
-    return await fetchSheetPricing(sheetId, gid)
+    return await fetchSheetData(sheetId, gid)
   } catch (error) {
-    console.warn("Failed to fetch sheet pricing, using defaults:", error)
-    return { "vertical-seam": { rates: defaultPricing, breakdown: {} } }
+    console.warn("Failed to fetch sheet data, using defaults:", error)
+    return {
+      pricing: { "vertical-seam": { rates: defaultPricing, breakdown: {} } },
+      fees: defaultFeeConfig,
+    }
   }
 }

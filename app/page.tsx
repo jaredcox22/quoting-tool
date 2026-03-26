@@ -1,8 +1,8 @@
-import { getPricing } from "@/lib/google-sheets"
+import { getSheetData } from "@/lib/google-sheets"
 import RoofingCalculator from "@/components/roofing-calculator"
 
 export default async function Page() {
-  const pricingByType = await getPricing()
+  const { pricing, fees } = await getSheetData()
 
-  return <RoofingCalculator pricingByType={pricingByType} />
+  return <RoofingCalculator pricingByType={pricing} feeConfig={fees} />
 }

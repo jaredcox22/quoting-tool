@@ -9,14 +9,13 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import {
   Ruler,
-  DollarSign,
   RotateCcw,
   Layers,
   CircleDot,
   ChevronRight,
 } from "lucide-react"
-import type { RoofTypePricing, PricingData, PricingBreakdown, LineItemDetail } from "@/lib/google-sheets"
-import { defaultPricing } from "@/lib/google-sheets"
+import type { RoofTypePricing, PricingData, PricingBreakdown, LineItemDetail, FeeConfig } from "@/lib/google-sheets"
+import { defaultPricing, defaultFeeConfig } from "@/lib/google-sheets"
 
 type RoofType = "vertical-seam" | "1-slr-panel" | "ultra-2000"
 
@@ -33,11 +32,6 @@ interface FormData {
   pipeFlashing: number
   ventilation: number
   snowRetention: number
-  dumpsterFee: number
-  commission: number
-  financing: number
-  satellite: number
-  permits: number
 }
 
 const initialFormData: FormData = {
@@ -53,11 +47,6 @@ const initialFormData: FormData = {
   pipeFlashing: 0,
   ventilation: 0,
   snowRetention: 0,
-  dumpsterFee: 0,
-  commission: 0,
-  financing: 0,
-  satellite: 0,
-  permits: 0,
 }
 
 const roofTypes = [
@@ -80,11 +69,14 @@ const roofTypes = [
 
 interface RoofingCalculatorProps {
   pricingByType: RoofTypePricing
+  feeConfig: FeeConfig
 }
 
-export default function RoofingCalculator({ pricingByType }: RoofingCalculatorProps) {
+export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingCalculatorProps) {
   const [selectedRoofType, setSelectedRoofType] = useState<RoofType>("vertical-seam")
   const [formData, setFormData] = useState<FormData>(initialFormData)
+
+  const fees = feeConfig ?? defaultFeeConfig
 
   const handleInputChange = (field: keyof FormData, value: string) => {
     const numValue = value === "" ? 0 : parseFloat(value)
@@ -106,7 +98,6 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
   const calculations = useMemo(() => {
     const squares = formData.squares * pricing.squareRate
     const ridge = formData.ridgeLength * pricing.ridgeRate
-    // const hip = formData.hipLength * pricing.hipRate
     const eave = formData.eaveLength * pricing.eaveRate
     const rake = formData.rakeLength * pricing.rakeRate
     const valleys = formData.valleyLength * pricing.valleyRate
@@ -122,17 +113,27 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
       wallFlashing + stepFlashing + pitchChange + pipeFlashing +
       ventilation + snowRetention + pricing.miscFixedCost
 
-    const fees =
-      formData.dumpsterFee +
-      formData.permits +
-      formData.satellite +
-      materialSubtotal * (formData.commission / 100) +
-      materialSubtotal * (formData.financing / 100)
+    const subLaborPanels = formData.squares * fees.subLaborPerSquare
+    const subLaborRidge = formData.ridgeLength * fees.subLaborPerRidgeFt
+    const subLabor = subLaborPanels + subLaborRidge
+
+    const dumpsterFee = fees.dumpsterTiers.find(
+      (t) => formData.squares >= t.minSq && formData.squares <= t.maxSq
+    )?.cost ?? 0
+
+    const financing = materialSubtotal * (fees.financingPct / 100)
+    const salesTax = materialSubtotal * (fees.salesTaxPct / 100)
+
+    const preCommission =
+      materialSubtotal + subLabor + dumpsterFee +
+      fees.satellite + fees.permits + financing + salesTax
+
+    const commission = preCommission * (fees.commissionPct / 100)
+    const total = preCommission + commission
 
     return {
       squares,
       ridge,
-      // hip: 0,
       eave,
       rake,
       valleys,
@@ -144,10 +145,17 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
       snowRetention,
       miscFixedCost: pricing.miscFixedCost,
       materialSubtotal,
-      fees,
-      total: materialSubtotal + fees,
+      subLaborPanels,
+      subLaborRidge,
+      subLabor,
+      dumpsterFee,
+      financing,
+      salesTax,
+      preCommission,
+      commission,
+      total,
     }
-  }, [formData, pricing])
+  }, [formData, pricing, fees])
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("en-US", {
@@ -318,61 +326,6 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
                 </div>
               </CardContent>
             </Card>
-
-            <Card>
-              <CardHeader>
-                <div className="flex items-center gap-2">
-                  <DollarSign className="size-5 text-muted-foreground" />
-                  <CardTitle className="text-lg">Additional Fees & Adjustments</CardTitle>
-                </div>
-                <CardDescription>
-                  Include any additional project costs or percentage-based adjustments.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-6 sm:grid-cols-2">
-                  <FormField
-                    label="Dumpster Fee"
-                    id="dumpsterFee"
-                    value={formData.dumpsterFee}
-                    onChange={(v) => handleInputChange("dumpsterFee", v)}
-                    prefix="$"
-                  />
-                  <FormField
-                    label="Commission"
-                    id="commission"
-                    value={formData.commission}
-                    onChange={(v) => handleInputChange("commission", v)}
-                    suffix="%"
-                    helper="Percentage of material cost"
-                  />
-                  <FormField
-                    label="Financing"
-                    id="financing"
-                    value={formData.financing}
-                    onChange={(v) => handleInputChange("financing", v)}
-                    suffix="%"
-                    helper="Financing fee percentage"
-                  />
-                  <FormField
-                    label="Satellite"
-                    id="satellite"
-                    value={formData.satellite}
-                    onChange={(v) => handleInputChange("satellite", v)}
-                    prefix="$"
-                  />
-                  <FormField
-                    label="Permits"
-                    id="permits"
-                    value={formData.permits}
-                    onChange={(v) => handleInputChange("permits", v)}
-                    prefix="$"
-                  />
-                </div>
-              </CardContent>
-            </Card>
-
-            
           </div>
 
           <div className="lg:sticky lg:top-8 lg:h-fit">
@@ -391,18 +344,42 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
                 <Separator />
 
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-foreground">Subtotal</span>
-                  <span className="text-sm font-semibold text-foreground">
+                  <span className="text-sm font-medium text-foreground">Material Subtotal</span>
+                  <span className="text-sm font-semibold text-foreground tabular-nums">
                     {formatCurrency(calculations.materialSubtotal)}
                   </span>
                 </div>
 
+                <div className="flex flex-col gap-1.5">
+                  <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                    Fees & Adjustments
+                  </h3>
+                  <FeeRow label="Sub Labor" value={calculations.subLabor}>
+                    <FeeDetail label={`Panels (${formatCompactNumber(formData.squares)} sq × ${formatCurrency(fees.subLaborPerSquare)})`} value={calculations.subLaborPanels} />
+                    <FeeDetail label={`Ridge (${formatCompactNumber(formData.ridgeLength)} ft × ${formatCurrency(fees.subLaborPerRidgeFt)})`} value={calculations.subLaborRidge} />
+                  </FeeRow>
+                  <FeeRow
+                    label={`Dumpster Fee${formData.squares > 0 ? ` (${formData.squares} sq)` : ""}`}
+                    value={calculations.dumpsterFee}
+                  />
+                  <FeeRow label="Satellite" value={fees.satellite} />
+                  <FeeRow label="Permits" value={fees.permits} />
+                  <FeeRow label={`Financing (${formatCompactNumber(fees.financingPct)}%)`} value={calculations.financing} />
+                  <FeeRow label={`Sales Tax (${formatCompactNumber(fees.salesTaxPct)}%)`} value={calculations.salesTax} />
+                </div>
+
+                <Separator />
+
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-muted-foreground">Fees & Adjustments</span>
-                  <span className="text-sm text-muted-foreground">
-                    {formatCurrency(calculations.fees)}
+                  <span className="text-sm font-medium text-muted-foreground">Pre-commission</span>
+                  <span className="text-sm text-muted-foreground tabular-nums">
+                    {formatCurrency(calculations.preCommission)}
                   </span>
                 </div>
+                <FeeRow
+                  label={`Commission (${formatCompactNumber(fees.commissionPct)}%)`}
+                  value={calculations.commission}
+                />
 
                 <Separator />
 
@@ -416,7 +393,7 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
                 </div>
 
                 <p className="text-xs text-muted-foreground text-center leading-relaxed">
-                  Pricing updates dynamically based on selected roof type and entered values. Final quote may vary based on site conditions.
+                  Pricing and fees update dynamically from the connected spreadsheet. Final quote may vary based on site conditions.
                 </p>
 
                 <Button variant="outline" onClick={handleReset} className="w-full gap-2">
@@ -428,6 +405,63 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
           </div>
         </div>
       </main>
+    </div>
+  )
+}
+
+function FeeRow({
+  label,
+  value,
+  children,
+}: {
+  label: string
+  value: number
+  children?: React.ReactNode
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const hasChildren = !!children
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => hasChildren && setExpanded(!expanded)}
+        className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition-colors ${
+          hasChildren ? "hover:bg-muted/50 cursor-pointer" : "cursor-default"
+        } ${expanded ? "bg-muted/50" : ""}`}
+      >
+        <span className="flex items-center gap-1.5 text-muted-foreground">
+          {hasChildren ? (
+            <ChevronRight
+              className={`size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200 ${
+                expanded ? "rotate-90" : ""
+              }`}
+            />
+          ) : (
+            <span className="w-3.5 shrink-0" />
+          )}
+          {label}
+        </span>
+        <span className={`tabular-nums ${value > 0 ? "text-foreground" : "text-muted-foreground/50"}`}>
+          {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(value)}
+        </span>
+      </button>
+      {expanded && hasChildren && (
+        <div className="ml-6.5 mt-0.5 mb-1 flex flex-col gap-px border-l-2 border-muted pl-3">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FeeDetail({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 py-0.5 text-xs">
+      <span className="text-muted-foreground/80 truncate min-w-0">{label}</span>
+      <span className="text-muted-foreground/80 font-medium shrink-0 tabular-nums">
+        {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(value)}
+      </span>
     </div>
   )
 }
@@ -485,7 +519,7 @@ function BreakdownSection({
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-          Pricing Breakdown
+          Materials
         </h3>
         <button
           type="button"
