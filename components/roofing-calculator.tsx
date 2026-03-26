@@ -399,7 +399,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                         type="number"
                         min={0}
                         max={99}
-                        step={0.5}
+                        step={1}
                         value={profitMarginPct}
                         onChange={(e) => {
                           const v = parseFloat(e.target.value)
@@ -414,7 +414,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                     id="profitMargin"
                     min={0}
                     max={60}
-                    step={0.5}
+                    step={1}
                     value={[profitMarginPct]}
                     onValueChange={([v]) => setProfitMarginPct(v)}
                     className="w-full"
