@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, useCallback } from "react"
+import { useState, useMemo, useCallback, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -77,7 +77,14 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
   const [formData, setFormData] = useState<FormData>(initialFormData)
 
   const fees = feeConfig ?? defaultFeeConfig
-  const [profitMarginPct, setProfitMarginPct] = useState(fees.goalProfitMarginPct)
+  const maxGoalProfitMargin = Math.max(0, Math.floor(99 - fees.commissionPct))
+  const [profitMarginPct, setProfitMarginPct] = useState(
+    Math.min(fees.goalProfitMarginPct, maxGoalProfitMargin)
+  )
+
+  useEffect(() => {
+    setProfitMarginPct((prev) => Math.min(prev, maxGoalProfitMargin))
+  }, [maxGoalProfitMargin])
 
   const handleInputChange = (field: keyof FormData, value: string) => {
     const numValue = value === "" ? 0 : parseFloat(value)
@@ -87,7 +94,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
   const handleReset = () => {
     setFormData(initialFormData)
     setSelectedRoofType("vertical-seam")
-    setProfitMarginPct(fees.goalProfitMarginPct)
+    setProfitMarginPct(Math.min(fees.goalProfitMarginPct, maxGoalProfitMargin))
   }
 
   const entry = pricingByType?.[selectedRoofType]
@@ -134,9 +141,12 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     const commissionDecimal = fees.commissionPct / 100
     const divisor = 1 - marginDecimal - commissionDecimal
 
-    const salePrice = divisor > 0 ? totalHardCosts / divisor : totalHardCosts
-    const commission = salePrice * commissionDecimal
-    const profit = salePrice - totalHardCosts - commission
+    // If requested margin + commission is >= 100%, there is no finite sale price.
+    // Keep values non-misleading instead of collapsing to hard-cost fallback math.
+    const invalidMarginTarget = divisor <= 0
+    const salePrice = invalidMarginTarget ? Number.POSITIVE_INFINITY : totalHardCosts / divisor
+    const commission = invalidMarginTarget ? Number.POSITIVE_INFINITY : salePrice * commissionDecimal
+    const profit = invalidMarginTarget ? Number.POSITIVE_INFINITY : salePrice - totalHardCosts - commission
 
     return {
       squares,
@@ -159,6 +169,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       financing,
       salesTax,
       totalHardCosts,
+      invalidMarginTarget,
       commission,
       profit,
       salePrice,
@@ -166,6 +177,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
   }, [formData, pricing, fees, profitMarginPct])
 
   const formatCurrency = (value: number) => {
+    if (!Number.isFinite(value)) return "N/A"
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: "USD",
@@ -389,12 +401,12 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                         id="profitMarginInput"
                         type="number"
                         min={0}
-                        max={99}
+                          max={maxGoalProfitMargin}
                         step={1}
                         value={profitMarginPct}
                         onChange={(e) => {
                           const v = parseFloat(e.target.value)
-                          if (!isNaN(v) && v >= 0 && v < 100) setProfitMarginPct(v)
+                            if (!isNaN(v) && v >= 0 && v <= maxGoalProfitMargin) setProfitMarginPct(v)
                         }}
                         className="w-20 h-8 text-right text-sm tabular-nums"
                       />
@@ -404,7 +416,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                   <Slider
                     id="profitMargin"
                     min={0}
-                    max={60}
+                      max={maxGoalProfitMargin}
                     step={1}
                     value={[profitMarginPct]}
                     onValueChange={([v]) => setProfitMarginPct(v)}
@@ -428,6 +440,12 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                     </span>
                   </div>
                 </div>
+
+                  {calculations.invalidMarginTarget && (
+                    <p className="text-xs text-amber-600">
+                      Goal Profit Margin + Commission must be below 100%. Lower the margin target to see a valid sale price.
+                    </p>
+                  )}
 
                 <Separator />
 
@@ -521,7 +539,7 @@ function BreakdownSection({
   calculations,
   breakdown,
 }: {
-  calculations: Record<string, number>
+  calculations: Record<string, number | boolean>
   breakdown: PricingBreakdown
 }) {
   const [allExpanded, setAllExpanded] = useState(false)
@@ -586,7 +604,7 @@ function BreakdownSection({
             key={row.key}
             rateKey={row.key}
             label={row.label}
-            value={calculations[row.calcKey]}
+            value={Number(calculations[row.calcKey] ?? 0)}
             items={breakdown[row.key as keyof PricingBreakdown]}
             expanded={expandedKeys.has(row.key)}
             onToggle={toggle}
