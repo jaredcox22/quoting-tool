@@ -23,7 +23,7 @@ type RoofType = "vertical-seam" | "1-slr-panel" | "ultra-2000"
 interface FormData {
   squares: number
   ridgeLength: number
-  hipLength: number
+  // hipLength: number
   eaveLength: number
   rakeLength: number
   valleyLength: number
@@ -43,7 +43,7 @@ interface FormData {
 const initialFormData: FormData = {
   squares: 0,
   ridgeLength: 0,
-  hipLength: 0,
+  // hipLength: 0,
   eaveLength: 0,
   rakeLength: 0,
   valleyLength: 0,
@@ -106,7 +106,7 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
   const calculations = useMemo(() => {
     const squares = formData.squares * pricing.squareRate
     const ridge = formData.ridgeLength * pricing.ridgeRate
-    const hip = formData.hipLength * pricing.hipRate
+    // const hip = formData.hipLength * pricing.hipRate
     const eave = formData.eaveLength * pricing.eaveRate
     const rake = formData.rakeLength * pricing.rakeRate
     const valleys = formData.valleyLength * pricing.valleyRate
@@ -118,7 +118,7 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
     const snowRetention = formData.snowRetention * pricing.snowRetentionRate
 
     const materialSubtotal =
-      squares + ridge + hip + eave + rake + valleys +
+      squares + ridge + eave + rake + valleys +
       wallFlashing + stepFlashing + pitchChange + pipeFlashing +
       ventilation + snowRetention + pricing.miscFixedCost
 
@@ -132,7 +132,7 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
     return {
       squares,
       ridge,
-      hip,
+      // hip: 0,
       eave,
       rake,
       valleys,
@@ -245,13 +245,13 @@ export default function RoofingCalculator({ pricingByType }: RoofingCalculatorPr
                     onChange={(v) => handleInputChange("ridgeLength", v)}
                     suffix="ft"
                   />
-                  <FormField
+                  {/* <FormField
                     label="Hip Length"
                     id="hipLength"
                     value={formData.hipLength}
                     onChange={(v) => handleInputChange("hipLength", v)}
                     suffix="ft"
-                  />
+                  /> */}
                   <FormField
                     label="Eave Length"
                     id="eaveLength"
@@ -468,7 +468,7 @@ function BreakdownSection({
   const rows: { key: string; label: string; calcKey: string }[] = [
     { key: "squareRate", label: "Squares", calcKey: "squares" },
     { key: "ridgeRate", label: "Ridge", calcKey: "ridge" },
-    { key: "hipRate", label: "Hip", calcKey: "hip" },
+    // { key: "hipRate", label: "Hip", calcKey: "hip" },
     { key: "eaveRate", label: "Eaves", calcKey: "eave" },
     { key: "rakeRate", label: "Rakes", calcKey: "rake" },
     { key: "valleyRate", label: "Valleys", calcKey: "valleys" },
