@@ -453,6 +453,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                     id="pitchChange"
                     value={formData.pitchChange}
                     onChange={(v) => handleInputChange("pitchChange", v)}
+                    suffix="ft"
                   />
                   <FormField
                     label={pipeLabelUpTo6}
