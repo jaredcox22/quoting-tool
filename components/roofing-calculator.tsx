@@ -4,6 +4,7 @@ import { useState, useMemo, useCallback, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
@@ -22,6 +23,8 @@ type RoofType = "vertical-seam" | "1-slr-panel" | "ultra-2000"
 interface FormData {
   squares: number
   steepPitchSquares: number
+  layers: number
+  cedarShakeLayers: number
   ridgeLength: number
   // hipLength: number
   eaveLength: number
@@ -38,6 +41,8 @@ interface FormData {
 const initialFormData: FormData = {
   squares: 0,
   steepPitchSquares: 0,
+  layers: 1,
+  cedarShakeLayers: 0,
   ridgeLength: 0,
   // hipLength: 0,
   eaveLength: 0,
@@ -77,6 +82,7 @@ interface RoofingCalculatorProps {
 export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingCalculatorProps) {
   const [selectedRoofType, setSelectedRoofType] = useState<RoofType>("vertical-seam")
   const [formData, setFormData] = useState<FormData>(initialFormData)
+  const [hasCedarShake, setHasCedarShake] = useState(false)
 
   const fees = feeConfig ?? defaultFeeConfig
   const maxGoalProfitMargin = Math.max(0, Math.floor(99 - fees.commissionPct))
@@ -87,6 +93,13 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
   useEffect(() => {
     setProfitMarginPct((prev) => Math.min(prev, maxGoalProfitMargin))
   }, [maxGoalProfitMargin])
+
+  useEffect(() => {
+    if (formData.layers <= 0 && hasCedarShake) {
+      setHasCedarShake(false)
+      setFormData((prev) => ({ ...prev, cedarShakeLayers: 0 }))
+    }
+  }, [formData.layers, hasCedarShake])
 
   const handleInputChange = (field: keyof FormData, value: string) => {
     const numValue = value === "" ? 0 : parseFloat(value)
@@ -109,12 +122,29 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
         }
       }
 
+      if (field === "layers") {
+        const nextLayers = Math.max(0, safeValue)
+        return {
+          ...prev,
+          layers: nextLayers,
+          cedarShakeLayers: Math.min(prev.cedarShakeLayers, nextLayers),
+        }
+      }
+
+      if (field === "cedarShakeLayers") {
+        return {
+          ...prev,
+          cedarShakeLayers: Math.min(Math.max(0, safeValue), prev.layers),
+        }
+      }
+
       return { ...prev, [field]: Math.max(0, safeValue) }
     })
   }
 
   const handleReset = () => {
     setFormData(initialFormData)
+    setHasCedarShake(false)
     setSelectedRoofType("vertical-seam")
     setProfitMarginPct(Math.min(fees.goalProfitMarginPct, maxGoalProfitMargin))
   }
@@ -175,8 +205,14 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     const subLaborRidge = ridgeLength * fees.subLaborPerRidgeFt
     const subLabor = subLaborPanels + subLaborRidge
 
+    const effectiveCedarShakeLayers = hasCedarShake
+      ? Math.min(formData.cedarShakeLayers, formData.layers)
+      : 0
+    // Cedar shake layers are included in total layers and carry +0.5 extra weight.
+    const weightedLayers = formData.layers + (effectiveCedarShakeLayers * 0.5)
+    const dumpsterSquaresForTier = Math.ceil(formData.squares * weightedLayers)
     const dumpsterFee = fees.dumpsterTiers.find(
-      (t) => formData.squares >= t.minSq && formData.squares <= t.maxSq
+      (t) => dumpsterSquaresForTier >= t.minSq && dumpsterSquaresForTier <= t.maxSq
     )?.cost ?? 0
 
     const salesTax = materialSubtotal * (fees.salesTaxPct / 100)
@@ -230,6 +266,8 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       subLaborPanels,
       subLaborRidge,
       subLabor,
+      weightedLayers,
+      dumpsterSquaresForTier,
       dumpsterFee,
       financing,
       salesTax,
@@ -406,6 +444,46 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                     onChange={(v) => handleInputChange("snowRetention", v)}
                     suffix="ft"
                   />
+                  <div className="sm:col-span-2 mt-2">
+                    <Separator className="mb-4" />
+                    <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                      Tear Off
+                    </h3>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    <FormField
+                      label="Layers"
+                      id="layers"
+                      value={formData.layers}
+                      onChange={(v) => handleInputChange("layers", v)}
+                    />
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="hasCedarShake"
+                        checked={hasCedarShake}
+                        onCheckedChange={(checked) => {
+                          const enabled = checked === true && formData.layers > 0
+                          setHasCedarShake(enabled)
+                          if (!enabled) {
+                            setFormData((prev) => ({ ...prev, cedarShakeLayers: 0 }))
+                          }
+                        }}
+                      />
+                      <Label htmlFor="hasCedarShake" className="text-sm font-medium text-foreground">
+                        Any Cedar Shake layers?
+                      </Label>
+                    </div>
+                  </div>
+                  {hasCedarShake ? (
+                    <FormField
+                      label="Cedar Shake Layers"
+                      id="cedarShakeLayers"
+                      value={formData.cedarShakeLayers}
+                      onChange={(v) => handleInputChange("cedarShakeLayers", v)}
+                    />
+                  ) : (
+                    <div />
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -443,9 +521,37 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                     <FeeDetail label={`Ridge (${formatCompactNumber(formData.ridgeLength)} ft × ${formatCurrency(fees.subLaborPerRidgeFt)})`} value={calculations.subLaborRidge} />
                   </FeeRow>
                   <FeeRow
-                    label={`Dumpster Fee${formData.squares > 0 ? ` (${formData.squares} sq)` : ""}`}
+                    label={`Dumpster Fee${calculations.dumpsterSquaresForTier > 0 ? ` (${formatCompactNumber(calculations.dumpsterSquaresForTier)} sq)` : ""}`}
                     value={calculations.dumpsterFee}
-                  />
+                  >
+                    <div className="flex items-baseline justify-between gap-3 py-0.5 text-xs">
+                      <span className="text-muted-foreground/80 truncate min-w-0">Base Squares</span>
+                      <span className="text-muted-foreground/80 font-medium shrink-0 tabular-nums">
+                        {formatCompactNumber(formData.squares)} sq
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-3 py-0.5 text-xs">
+                      <span className="text-muted-foreground/80 truncate min-w-0">Layers</span>
+                      <span className="text-muted-foreground/80 font-medium shrink-0 tabular-nums">
+                        {formatCompactNumber(formData.layers)}
+                      </span>
+                    </div>
+                    {hasCedarShake && (
+                      <div className="flex items-baseline justify-between gap-3 py-0.5 text-xs">
+                        <span className="text-muted-foreground/80 truncate min-w-0">Cedar Shake Weight</span>
+                        <span className="text-muted-foreground/80 font-medium shrink-0 tabular-nums">
+                          +{formatCompactNumber(formData.cedarShakeLayers)} × 0.5 = +{formatCompactNumber(formData.cedarShakeLayers * 0.5)}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex items-baseline justify-between gap-3 py-0.5 text-xs">
+                      <span className="text-muted-foreground/80 truncate min-w-0">Weighted Squares</span>
+                      <span className="text-muted-foreground/80 font-medium shrink-0 tabular-nums">
+                        {formatCompactNumber(formData.squares)} × {formatCompactNumber(calculations.weightedLayers)} = {formatCompactNumber(calculations.dumpsterSquaresForTier)} sq
+                      </span>
+                    </div>
+                    <FeeDetail label="Applied Dumpster Tier" value={calculations.dumpsterFee} />
+                  </FeeRow>
                   <FeeRow label="Satellite" value={fees.satellite} />
                   <FeeRow label="Permits" value={fees.permits} />
                   <FeeRow label={`Financing (${formatCompactNumber(fees.financingPct)}%)`} value={calculations.financing} />
