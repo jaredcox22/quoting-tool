@@ -33,7 +33,9 @@ interface FormData {
   wallFlashing: number
   stepFlashing: number
   pitchChange: number
-  pipeFlashing: number
+  pipeFlashingUpTo6: number
+  pipeFlashingUpTo13: number
+  pipeFlashingUpTo19: number
   ventilation: number
   snowRetention: number
 }
@@ -51,7 +53,9 @@ const initialFormData: FormData = {
   wallFlashing: 0,
   stepFlashing: 0,
   pitchChange: 0,
-  pipeFlashing: 0,
+  pipeFlashingUpTo6: 0,
+  pipeFlashingUpTo13: 0,
+  pipeFlashingUpTo19: 0,
   ventilation: 0,
   snowRetention: 0,
 }
@@ -155,6 +159,10 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
 
   const pricing: PricingData = entry.rates ?? defaultPricing
   const breakdown: PricingBreakdown = entry.breakdown ?? {}
+  const pipeItems = breakdown.pipeFlashingRate ?? []
+  const pipeLabelUpTo6 = pipeItems.find((i) => i.name.toLowerCase().includes("up to 6"))?.name ?? 'Pipe Flashing up to 6"'
+  const pipeLabelUpTo13 = pipeItems.find((i) => i.name.toLowerCase().includes("up to 13"))?.name ?? 'High Temp Pipe Flashing up to 13"'
+  const pipeLabelUpTo19 = pipeItems.find((i) => i.name.toLowerCase().includes("up to 19"))?.name ?? 'High Temp Pipe Flashing up to 19"'
 
   const calculations = useMemo(() => {
     const ridgeLength = Math.ceil(formData.ridgeLength)
@@ -181,6 +189,24 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       }, 0)
     }
 
+    const computePipeFlashingTotal = () => {
+      const items = breakdown.pipeFlashingRate ?? []
+      if (items.length === 0) {
+        const totalQty = formData.pipeFlashingUpTo6 + formData.pipeFlashingUpTo13 + formData.pipeFlashingUpTo19
+        return totalQty * pricing.pipeFlashingRate
+      }
+
+      const matchQtyForItem = (itemName: string) => {
+        const name = itemName.toLowerCase()
+        if (name.includes("up to 19")) return formData.pipeFlashingUpTo19
+        if (name.includes("up to 13")) return formData.pipeFlashingUpTo13
+        if (name.includes("up to 6")) return formData.pipeFlashingUpTo6
+        return 0
+      }
+
+      return items.reduce((sum, item) => sum + (item.costPerUnit * matchQtyForItem(item.name)), 0)
+    }
+
     const steepPitchSquares = Math.min(formData.steepPitchSquares, formData.squares)
     const baseSquaresCost = computeLineTotal("squareRate", formData.squares)
     const steepPitchAdder = steepPitchSquares * pricing.squareRate * 0.1
@@ -193,7 +219,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     const wallFlashing = computeLineTotal("wallFlashingRate", wallFlashingLength)
     const stepFlashing = computeLineTotal("stepFlashingRate", stepFlashingLength)
     const pitchChange = computeLineTotal("pitchChangeRate", formData.pitchChange)
-    const pipeFlashing = computeLineTotal("pipeFlashingRate", formData.pipeFlashing)
+    const pipeFlashing = computePipeFlashingTotal()
     const ventilation = computeLineTotal("ventilationRate", ventilationLength)
     const snowRetention = computeLineTotal("snowRetentionRate", snowRetentionLength)
     const miscFixedCost = computeLineTotal("miscFixedCost", 1)
@@ -248,7 +274,10 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       wallFlashingQty: wallFlashingLength,
       stepFlashingQty: stepFlashingLength,
       pitchChangeQty: formData.pitchChange,
-      pipeFlashingQty: formData.pipeFlashing,
+      pipeFlashingQty: formData.pipeFlashingUpTo6 + formData.pipeFlashingUpTo13 + formData.pipeFlashingUpTo19,
+      pipeFlashingQtyUpTo6: formData.pipeFlashingUpTo6,
+      pipeFlashingQtyUpTo13: formData.pipeFlashingUpTo13,
+      pipeFlashingQtyUpTo19: formData.pipeFlashingUpTo19,
       ventilationQty: ventilationLength,
       snowRetentionQty: snowRetentionLength,
       miscFixedCostQty: 1,
@@ -369,7 +398,6 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                     id="steepPitchSquares"
                     value={formData.steepPitchSquares}
                     onChange={(v) => handleInputChange("steepPitchSquares", v)}
-                    helper="Squares with pitch 8/12 or greater (adds 10%)"
                   />
                   <FormField
                     label="Ridge Length"
@@ -425,14 +453,24 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                     id="pitchChange"
                     value={formData.pitchChange}
                     onChange={(v) => handleInputChange("pitchChange", v)}
-                    helper="Number of pitch transitions"
                   />
                   <FormField
-                    label="Pipe Flashing Qty"
-                    id="pipeFlashing"
-                    value={formData.pipeFlashing}
-                    onChange={(v) => handleInputChange("pipeFlashing", v)}
-                    helper="Number of pipe boots needed"
+                    label={pipeLabelUpTo6}
+                    id="pipeFlashingUpTo6"
+                    value={formData.pipeFlashingUpTo6}
+                    onChange={(v) => handleInputChange("pipeFlashingUpTo6", v)}
+                  />
+                  <FormField
+                    label={pipeLabelUpTo13}
+                    id="pipeFlashingUpTo13"
+                    value={formData.pipeFlashingUpTo13}
+                    onChange={(v) => handleInputChange("pipeFlashingUpTo13", v)}
+                  />
+                  <FormField
+                    label={pipeLabelUpTo19}
+                    id="pipeFlashingUpTo19"
+                    value={formData.pipeFlashingUpTo19}
+                    onChange={(v) => handleInputChange("pipeFlashingUpTo19", v)}
                   />
                   <FormField
                     label="Ventilation / Ridge Vent"
@@ -791,6 +829,9 @@ function BreakdownSection({
             value={Number(calculations[row.calcKey] ?? 0)}
             quantity={Number(calculations[row.quantityKey] ?? 0)}
             items={breakdown[row.key as keyof PricingBreakdown]}
+            pipeFlashingQtyUpTo6={Number(calculations.pipeFlashingQtyUpTo6 ?? 0)}
+            pipeFlashingQtyUpTo13={Number(calculations.pipeFlashingQtyUpTo13 ?? 0)}
+            pipeFlashingQtyUpTo19={Number(calculations.pipeFlashingQtyUpTo19 ?? 0)}
             steepPitchSquaresQty={Number(calculations.steepPitchSquaresQty ?? 0)}
             steepPitchAdder={Number(calculations.steepPitchAdder ?? 0)}
             expanded={expandedKeys.has(row.key)}
@@ -808,6 +849,9 @@ function ExpandableSummaryRow({
   value,
   quantity,
   items,
+  pipeFlashingQtyUpTo6,
+  pipeFlashingQtyUpTo13,
+  pipeFlashingQtyUpTo19,
   steepPitchSquaresQty,
   steepPitchAdder,
   expanded,
@@ -818,6 +862,9 @@ function ExpandableSummaryRow({
   value: number
   quantity: number
   items?: LineItemDetail[]
+  pipeFlashingQtyUpTo6?: number
+  pipeFlashingQtyUpTo13?: number
+  pipeFlashingQtyUpTo19?: number
   steepPitchSquaresQty?: number
   steepPitchAdder?: number
   expanded: boolean
@@ -832,10 +879,21 @@ function ExpandableSummaryRow({
 
   const detailRows: { name: string; unit: number; qty: number; total?: number; title?: string }[] =
     (items ?? []).map((item) => {
-      const rawUnits = item.multiplier * quantity
-      const billableUnits = item.multiplier < 1 ? Math.ceil(rawUnits) : rawUnits
+      const name = item.name.toLowerCase()
+      const customPipeQty =
+        rateKey === "pipeFlashingRate"
+          ? (name.includes("up to 19")
+            ? (pipeFlashingQtyUpTo19 ?? 0)
+            : name.includes("up to 13")
+              ? (pipeFlashingQtyUpTo13 ?? 0)
+              : name.includes("up to 6")
+                ? (pipeFlashingQtyUpTo6 ?? 0)
+                : 0)
+          : null
+      const rawUnits = customPipeQty ?? (item.multiplier * quantity)
+      const billableUnits = customPipeQty ?? (item.multiplier < 1 ? Math.ceil(rawUnits) : rawUnits)
       const total = item.costPerUnit * billableUnits
-      const roundedNote = item.multiplier < 1
+      const roundedNote = customPipeQty === null && item.multiplier < 1
         ? ` (rounded from ${formatCompactNumber(rawUnits)} to ${formatCompactNumber(billableUnits)})`
         : ""
 

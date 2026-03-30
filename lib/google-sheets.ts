@@ -128,8 +128,8 @@ const ITEM_MAPPINGS: ItemMapping[] = [
   { pattern: "Valley Metal", rate: "valleyRate", multiplier: 0.125 },
   { category: "Valleys", pattern: "High Temp Ice and Water Shield", rate: "valleyRate", multiplier: 1 / 60 },
 
-  { pattern: "Sidewall Flashing", rate: "wallFlashingRate", multiplier: 0.1 },
-  { pattern: "Endwall flashing", rate: "stepFlashingRate", multiplier: 0.1 },
+  { category: "Wall Flashing", pattern: "Sidewall Flashing", rate: "wallFlashingRate", multiplier: 0.1 },
+  { category: "Step Flashing", pattern: "Endwall flashing", rate: "stepFlashingRate", multiplier: 0.1 },
   { pattern: "Pitch Change", rate: "pitchChangeRate", multiplier: 0.1 },
   { pattern: "Pipe flashing up to 6", rate: "pipeFlashingRate", multiplier: 1 },
   { pattern: "High Temp Pipe flashing up to 13", rate: "pipeFlashingRate", multiplier: 1 },
@@ -156,6 +156,7 @@ const CATEGORY_TO_RATE: Record<string, keyof PricingData> = {
   "Rakes": "rakeRate",
   "Valleys": "valleyRate",
   "Wall Flashing": "wallFlashingRate",
+  "Step Flashing": "stepFlashingRate",
   "Pipe Flashing": "pipeFlashingRate",
   "Misc": "miscFixedCost",
   "Ventilation": "ventilationRate",
