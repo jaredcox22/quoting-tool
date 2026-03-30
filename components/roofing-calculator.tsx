@@ -136,25 +136,40 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     const ventilationLength = Math.ceil(formData.ventilation)
     const snowRetentionLength = Math.ceil(formData.snowRetention)
 
+    const computeLineTotal = (rateKey: keyof PricingData, quantity: number) => {
+      const items = breakdown[rateKey]
+      if (!items || items.length === 0) {
+        return quantity * pricing[rateKey]
+      }
+
+      return items.reduce((sum, item) => {
+        if (quantity <= 0) return sum
+        const rawUnits = item.multiplier * quantity
+        const billableUnits = item.multiplier < 1 ? Math.ceil(rawUnits) : rawUnits
+        return sum + billableUnits * item.costPerUnit
+      }, 0)
+    }
+
     const steepPitchSquares = Math.min(formData.steepPitchSquares, formData.squares)
-    const baseSquaresCost = formData.squares * pricing.squareRate
+    const baseSquaresCost = computeLineTotal("squareRate", formData.squares)
     const steepPitchAdder = steepPitchSquares * pricing.squareRate * 0.1
     const squares = baseSquaresCost + steepPitchAdder
-    const ridge = ridgeLength * pricing.ridgeRate
-    const eave = eaveLength * pricing.eaveRate
-    const rake = rakeLength * pricing.rakeRate
-    const valleys = valleyLength * pricing.valleyRate
-    const wallFlashing = wallFlashingLength * pricing.wallFlashingRate
-    const stepFlashing = stepFlashingLength * pricing.stepFlashingRate
-    const pitchChange = formData.pitchChange * pricing.pitchChangeRate
-    const pipeFlashing = formData.pipeFlashing * pricing.pipeFlashingRate
-    const ventilation = ventilationLength * pricing.ventilationRate
-    const snowRetention = snowRetentionLength * pricing.snowRetentionRate
+    const ridge = computeLineTotal("ridgeRate", ridgeLength)
+    const eave = computeLineTotal("eaveRate", eaveLength)
+    const rake = computeLineTotal("rakeRate", rakeLength)
+    const valleys = computeLineTotal("valleyRate", valleyLength)
+    const wallFlashing = computeLineTotal("wallFlashingRate", wallFlashingLength)
+    const stepFlashing = computeLineTotal("stepFlashingRate", stepFlashingLength)
+    const pitchChange = computeLineTotal("pitchChangeRate", formData.pitchChange)
+    const pipeFlashing = computeLineTotal("pipeFlashingRate", formData.pipeFlashing)
+    const ventilation = computeLineTotal("ventilationRate", ventilationLength)
+    const snowRetention = computeLineTotal("snowRetentionRate", snowRetentionLength)
+    const miscFixedCost = computeLineTotal("miscFixedCost", 1)
 
     const materialSubtotal =
       squares + ridge + eave + rake + valleys +
       wallFlashing + stepFlashing + pitchChange + pipeFlashing +
-      ventilation + snowRetention + pricing.miscFixedCost
+      ventilation + snowRetention + miscFixedCost
 
     const subLaborPanels = formData.squares * fees.subLaborPerSquare
     const subLaborRidge = ridgeLength * fees.subLaborPerRidgeFt
@@ -210,7 +225,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       pipeFlashing,
       ventilation,
       snowRetention,
-      miscFixedCost: pricing.miscFixedCost,
+      miscFixedCost,
       materialSubtotal,
       subLaborPanels,
       subLaborRidge,
@@ -703,11 +718,14 @@ function ExpandableSummaryRow({
       minimumFractionDigits: 2,
     }).format(v)
 
-  const detailRows: { name: string; unit: number; qty: number; title?: string }[] =
+  const detailRows: { name: string; unit: number; qty: number; total?: number; title?: string }[] =
     (items ?? []).map((item) => ({
       name: item.name,
-      unit: item.total,
-      qty: quantity,
+      unit: item.costPerUnit,
+      qty: item.multiplier < 1 ? Math.ceil(item.multiplier * quantity) : item.multiplier * quantity,
+      total:
+        item.costPerUnit *
+        (item.multiplier < 1 ? Math.ceil(item.multiplier * quantity) : item.multiplier * quantity),
     }))
 
   if (rateKey === "squareRate" && (steepPitchSquaresQty ?? 0) > 0 && (steepPitchAdder ?? 0) > 0) {
@@ -763,7 +781,7 @@ function ExpandableSummaryRow({
               <span className="text-muted-foreground/60 shrink-0 tabular-nums">
                 {formatCurrency(item.unit)} &times; {formatCompactNumber(item.qty)}
                 <span className="text-muted-foreground/80 font-medium ml-1">
-                  = {formatCurrency(item.unit * item.qty)}
+                  = {formatCurrency(item.total ?? (item.unit * item.qty))}
                 </span>
               </span>
             </div>
