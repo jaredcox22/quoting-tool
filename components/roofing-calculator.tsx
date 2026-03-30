@@ -26,7 +26,7 @@ interface FormData {
   layers: number
   cedarShakeLayers: number
   ridgeLength: number
-  // hipLength: number
+  hipLength: number
   eaveLength: number
   rakeLength: number
   valleyLength: number
@@ -44,7 +44,7 @@ const initialFormData: FormData = {
   layers: 1,
   cedarShakeLayers: 0,
   ridgeLength: 0,
-  // hipLength: 0,
+  hipLength: 0,
   eaveLength: 0,
   rakeLength: 0,
   valleyLength: 0,
@@ -158,6 +158,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
 
   const calculations = useMemo(() => {
     const ridgeLength = Math.ceil(formData.ridgeLength)
+    const hipLength = Math.ceil(formData.hipLength)
     const eaveLength = Math.ceil(formData.eaveLength)
     const rakeLength = Math.ceil(formData.rakeLength)
     const valleyLength = Math.ceil(formData.valleyLength)
@@ -185,6 +186,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     const steepPitchAdder = steepPitchSquares * pricing.squareRate * 0.1
     const squares = baseSquaresCost + steepPitchAdder
     const ridge = computeLineTotal("ridgeRate", ridgeLength)
+    const hip = computeLineTotal("hipRate", hipLength)
     const eave = computeLineTotal("eaveRate", eaveLength)
     const rake = computeLineTotal("rakeRate", rakeLength)
     const valleys = computeLineTotal("valleyRate", valleyLength)
@@ -197,7 +199,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     const miscFixedCost = computeLineTotal("miscFixedCost", 1)
 
     const materialSubtotal =
-      squares + ridge + eave + rake + valleys +
+      squares + ridge + hip + eave + rake + valleys +
       wallFlashing + stepFlashing + pitchChange + pipeFlashing +
       ventilation + snowRetention + miscFixedCost
 
@@ -239,6 +241,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       squaresQty: formData.squares,
       steepPitchSquaresQty: steepPitchSquares,
       ridgeQty: ridgeLength,
+      hipQty: hipLength,
       eaveQty: eaveLength,
       rakeQty: rakeLength,
       valleysQty: valleyLength,
@@ -252,6 +255,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       squares,
       steepPitchAdder,
       ridge,
+      hip,
       eave,
       rake,
       valleys,
@@ -374,13 +378,13 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                     onChange={(v) => handleInputChange("ridgeLength", v)}
                     suffix="ft"
                   />
-                  {/* <FormField
+                  <FormField
                     label="Hip Length"
                     id="hipLength"
                     value={formData.hipLength}
                     onChange={(v) => handleInputChange("hipLength", v)}
                     suffix="ft"
-                  /> */}
+                  />
                   <FormField
                     label="Eave Length"
                     id="eaveLength"
@@ -702,10 +706,12 @@ function FeeRow({
   )
 }
 
-function FeeDetail({ label, value }: { label: string; value: number }) {
+function FeeDetail({ label, value, title }: { label: string; value: number; title?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-0.5 text-xs">
-      <span className="text-muted-foreground/80 truncate min-w-0">{label}</span>
+      <span className="text-muted-foreground/80 truncate min-w-0" title={title}>
+        {label}
+      </span>
       <span className="text-muted-foreground/80 font-medium shrink-0 tabular-nums">
         {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(value)}
       </span>
@@ -749,7 +755,7 @@ function BreakdownSection({
   const rows: { key: string; label: string; calcKey: string; quantityKey: string }[] = [
     { key: "squareRate", label: "Squares", calcKey: "squares", quantityKey: "squaresQty" },
     { key: "ridgeRate", label: "Ridge", calcKey: "ridge", quantityKey: "ridgeQty" },
-    // { key: "hipRate", label: "Hip", calcKey: "hip" },
+    { key: "hipRate", label: "Hip", calcKey: "hip", quantityKey: "hipQty" },
     { key: "eaveRate", label: "Eaves", calcKey: "eave", quantityKey: "eaveQty" },
     { key: "rakeRate", label: "Rakes", calcKey: "rake", quantityKey: "rakeQty" },
     { key: "valleyRate", label: "Valleys", calcKey: "valleys", quantityKey: "valleysQty" },
@@ -825,14 +831,22 @@ function ExpandableSummaryRow({
     }).format(v)
 
   const detailRows: { name: string; unit: number; qty: number; total?: number; title?: string }[] =
-    (items ?? []).map((item) => ({
-      name: item.name,
-      unit: item.costPerUnit,
-      qty: item.multiplier < 1 ? Math.ceil(item.multiplier * quantity) : item.multiplier * quantity,
-      total:
-        item.costPerUnit *
-        (item.multiplier < 1 ? Math.ceil(item.multiplier * quantity) : item.multiplier * quantity),
-    }))
+    (items ?? []).map((item) => {
+      const rawUnits = item.multiplier * quantity
+      const billableUnits = item.multiplier < 1 ? Math.ceil(rawUnits) : rawUnits
+      const total = item.costPerUnit * billableUnits
+      const roundedNote = item.multiplier < 1
+        ? ` (rounded from ${formatCompactNumber(rawUnits)} to ${formatCompactNumber(billableUnits)})`
+        : ""
+
+      return {
+        name: item.name,
+        unit: item.costPerUnit,
+        qty: billableUnits,
+        total,
+        title: `${item.name}: ${formatCurrency(item.costPerUnit)} x ${formatCompactNumber(billableUnits)} = ${formatCurrency(total)}${roundedNote}`,
+      }
+    })
 
   if (rateKey === "squareRate" && (steepPitchSquaresQty ?? 0) > 0 && (steepPitchAdder ?? 0) > 0) {
     const steepQty = steepPitchSquaresQty ?? 0
@@ -842,7 +856,7 @@ function ExpandableSummaryRow({
       name: "Steep Pitch Adder (10%)",
       unit: steepUnitAdder,
       qty: steepQty,
-      title: `10% of base square rate (${formatCurrency(baseSquareRate)} per sq)`,
+      title: `Steep pitch adder: 10% of ${formatCurrency(baseSquareRate)} per sq = ${formatCurrency(steepUnitAdder)} per steep sq`,
     })
   }
 

@@ -117,8 +117,8 @@ const ITEM_MAPPINGS: ItemMapping[] = [
 
   { pattern: "Ridge Cap", rate: "ridgeRate", multiplier: 0.1 },
   { pattern: "Z Trim for ridge", rate: "ridgeRate", multiplier: 0.2 },
-  { pattern: "Preform Hip Cap", rate: "ridgeRate", multiplier: 0.1 },
-  { pattern: "Hip", rate: "ridgeRate", multiplier: 0.1 },
+  { category: "Hips", pattern: "Preform Hip Cap", rate: "hipRate", multiplier: 0.1 },
+  { category: "Hips", pattern: "Hip", rate: "hipRate", multiplier: 0.1 },
 
   { pattern: "Extended Eave Trim", rate: "eaveRate", multiplier: 0.1 },
   { category: "Eaves", pattern: "High Temp Ice and Water Shield", rate: "eaveRate", multiplier: 2 / 60 },
@@ -151,6 +151,7 @@ const ITEM_MAPPINGS: ItemMapping[] = [
 const CATEGORY_TO_RATE: Record<string, keyof PricingData> = {
   "Squares": "squareRate",
   "Ridges": "ridgeRate",
+  "Hips": "hipRate",
   "Eaves": "eaveRate",
   "Rakes": "rakeRate",
   "Valleys": "valleyRate",
