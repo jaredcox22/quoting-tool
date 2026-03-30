@@ -21,6 +21,7 @@ type RoofType = "vertical-seam" | "1-slr-panel" | "ultra-2000"
 
 interface FormData {
   squares: number
+  steepPitchSquares: number
   ridgeLength: number
   // hipLength: number
   eaveLength: number
@@ -36,6 +37,7 @@ interface FormData {
 
 const initialFormData: FormData = {
   squares: 0,
+  steepPitchSquares: 0,
   ridgeLength: 0,
   // hipLength: 0,
   eaveLength: 0,
@@ -88,7 +90,27 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
 
   const handleInputChange = (field: keyof FormData, value: string) => {
     const numValue = value === "" ? 0 : parseFloat(value)
-    setFormData((prev) => ({ ...prev, [field]: isNaN(numValue) ? 0 : numValue }))
+    const safeValue = isNaN(numValue) ? 0 : numValue
+
+    setFormData((prev) => {
+      if (field === "squares") {
+        const nextSquares = Math.max(0, safeValue)
+        return {
+          ...prev,
+          squares: nextSquares,
+          steepPitchSquares: Math.min(prev.steepPitchSquares, nextSquares),
+        }
+      }
+
+      if (field === "steepPitchSquares") {
+        return {
+          ...prev,
+          steepPitchSquares: Math.min(Math.max(0, safeValue), prev.squares),
+        }
+      }
+
+      return { ...prev, [field]: Math.max(0, safeValue) }
+    })
   }
 
   const handleReset = () => {
@@ -114,7 +136,10 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     const ventilationLength = Math.ceil(formData.ventilation)
     const snowRetentionLength = Math.ceil(formData.snowRetention)
 
-    const squares = formData.squares * pricing.squareRate
+    const steepPitchSquares = Math.min(formData.steepPitchSquares, formData.squares)
+    const baseSquaresCost = formData.squares * pricing.squareRate
+    const steepPitchAdder = steepPitchSquares * pricing.squareRate * 0.1
+    const squares = baseSquaresCost + steepPitchAdder
     const ridge = ridgeLength * pricing.ridgeRate
     const eave = eaveLength * pricing.eaveRate
     const rake = rakeLength * pricing.rakeRate
@@ -161,6 +186,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
 
     return {
       squaresQty: formData.squares,
+      steepPitchSquaresQty: steepPitchSquares,
       ridgeQty: ridgeLength,
       eaveQty: eaveLength,
       rakeQty: rakeLength,
@@ -173,6 +199,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       snowRetentionQty: snowRetentionLength,
       miscFixedCostQty: 1,
       squares,
+      steepPitchAdder,
       ridge,
       eave,
       rake,
@@ -279,6 +306,13 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                     id="squares"
                     value={formData.squares}
                     onChange={(v) => handleInputChange("squares", v)}
+                  />
+                  <FormField
+                    label="Steep Pitch Squares"
+                    id="steepPitchSquares"
+                    value={formData.steepPitchSquares}
+                    onChange={(v) => handleInputChange("steepPitchSquares", v)}
+                    helper="Squares with pitch 8/12 or greater (adds 10%)"
                   />
                   <FormField
                     label="Ridge Length"
@@ -630,6 +664,8 @@ function BreakdownSection({
             value={Number(calculations[row.calcKey] ?? 0)}
             quantity={Number(calculations[row.quantityKey] ?? 0)}
             items={breakdown[row.key as keyof PricingBreakdown]}
+            steepPitchSquaresQty={Number(calculations.steepPitchSquaresQty ?? 0)}
+            steepPitchAdder={Number(calculations.steepPitchAdder ?? 0)}
             expanded={expandedKeys.has(row.key)}
             onToggle={toggle}
           />
@@ -645,6 +681,8 @@ function ExpandableSummaryRow({
   value,
   quantity,
   items,
+  steepPitchSquaresQty,
+  steepPitchAdder,
   expanded,
   onToggle,
 }: {
@@ -653,17 +691,38 @@ function ExpandableSummaryRow({
   value: number
   quantity: number
   items?: LineItemDetail[]
+  steepPitchSquaresQty?: number
+  steepPitchAdder?: number
   expanded: boolean
   onToggle: (key: string) => void
 }) {
-  const hasItems = items && items.length > 0
-
   const formatCurrency = (v: number) =>
     new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: "USD",
       minimumFractionDigits: 2,
     }).format(v)
+
+  const detailRows: { name: string; unit: number; qty: number; title?: string }[] =
+    (items ?? []).map((item) => ({
+      name: item.name,
+      unit: item.total,
+      qty: quantity,
+    }))
+
+  if (rateKey === "squareRate" && (steepPitchSquaresQty ?? 0) > 0 && (steepPitchAdder ?? 0) > 0) {
+    const steepQty = steepPitchSquaresQty ?? 0
+    const steepUnitAdder = (steepPitchAdder ?? 0) / steepQty
+    const baseSquareRate = steepUnitAdder / 0.1
+    detailRows.push({
+      name: "Steep Pitch Adder (10%)",
+      unit: steepUnitAdder,
+      qty: steepQty,
+      title: `10% of base square rate (${formatCurrency(baseSquareRate)} per sq)`,
+    })
+  }
+
+  const hasItems = detailRows.length > 0
 
   return (
     <div>
@@ -693,18 +752,18 @@ function ExpandableSummaryRow({
 
       {expanded && hasItems && (
         <div className="ml-6.5 mt-0.5 mb-1 flex flex-col gap-px border-l-2 border-muted pl-3">
-          {items.map((item, i) => (
+          {detailRows.map((item, i) => (
             <div
               key={i}
               className="flex items-baseline justify-between gap-3 py-0.5 text-xs"
             >
-              <span className="text-muted-foreground/80 truncate min-w-0">
+              <span className="text-muted-foreground/80 truncate min-w-0" title={item.title}>
                 {item.name}
               </span>
               <span className="text-muted-foreground/60 shrink-0 tabular-nums">
-                {formatCurrency(item.total)} &times; {formatCompactNumber(quantity)}
+                {formatCurrency(item.unit)} &times; {formatCompactNumber(item.qty)}
                 <span className="text-muted-foreground/80 font-medium ml-1">
-                  = {formatCurrency(item.total * quantity)}
+                  = {formatCurrency(item.unit * item.qty)}
                 </span>
               </span>
             </div>
