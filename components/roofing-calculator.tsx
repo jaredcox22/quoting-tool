@@ -18,7 +18,7 @@ import {
 import type { RoofTypePricing, PricingData, PricingBreakdown, LineItemDetail, FeeConfig } from "@/lib/google-sheets"
 import { defaultPricing, defaultFeeConfig } from "@/lib/google-sheets"
 
-type RoofType = "vertical-seam" | "1-slr-panel" | "ultra-2000"
+type RoofType = "vertical-seam" | "1-slr-panel" | "12-accent-panel" | "ultra-2000"
 
 interface FormData {
   squares: number
@@ -70,6 +70,11 @@ const roofTypes = [
     id: "1-slr-panel" as const,
     name: '1" SLR Panel',
     description: "Standing Lock Rib panel with superior weather resistance",
+  },
+  {
+    id: "12-accent-panel" as const,
+    name: '12" Accent Panel',
+    description: "Wide accent panel profile with bold shadow lines and strong curb appeal",
   },
   {
     id: "ultra-2000" as const,
@@ -348,7 +353,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                 <Layers className="size-5 text-muted-foreground" />
                 <h2 className="text-lg font-semibold text-foreground">Select Roof Type</h2>
               </div>
-              <div className="grid gap-4 sm:grid-cols-3">
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {roofTypes.map((type) => (
                   <button
                     key={type.id}

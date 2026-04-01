@@ -98,6 +98,7 @@ function zeroPricing(): PricingData {
 const SHEET_TYPE_TO_ID: Record<string, string> = {
   "Vertical Seam": "vertical-seam",
   '1" SLR Panel': "1-slr-panel",
+  '12" Accent Panel': "12-accent-panel",
   "Ultra 2000 Exposed Fastener": "ultra-2000",
 }
 
