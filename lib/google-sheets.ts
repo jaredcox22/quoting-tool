@@ -14,11 +14,16 @@ export interface PricingData {
   miscFixedCost: number
 }
 
+/** Misc sheet column B: "2 piece per job" vs "10 per sq" — drives qty × squares vs flat job qty */
+export type MiscUnitBasis = "perJob" | "perSq"
+
 export interface LineItemDetail {
   name: string
   multiplier: number
   costPerUnit: number
   total: number
+  /** Set for Misc rows from the unit/description column */
+  miscUnit?: MiscUnitBasis
 }
 
 export type PricingBreakdown = Partial<Record<keyof PricingData, LineItemDetail[]>>
@@ -229,6 +234,14 @@ function extractMultiplierFromDescription(description: string): number | null {
   return null
 }
 
+/** Parses Google Sheet Misc unit text (e.g. "2 piece per job", "10 per sq") */
+function parseMiscUnitBasis(description: string): MiscUnitBasis | null {
+  const d = description.toLowerCase()
+  if (/\bper\s*sq\b/.test(d)) return "perSq"
+  if (/\bper\s*job\b/.test(d)) return "perJob"
+  return null
+}
+
 function parseDumpsterTier(label: string): { minSq: number; maxSq: number } | null {
   const match = label.match(/^(\d+)-(\d+)\s+Squares$/i)
   if (!match) return null
@@ -354,6 +367,11 @@ function parseCSV(csvText: string): SheetData {
     const rateKey = mapping?.rate ?? CATEGORY_TO_RATE[currentCategory]
     if (!rateKey) continue
 
+    const miscUnit =
+      rateKey === "miscFixedCost"
+        ? (parseMiscUnitBasis(description) ?? "perJob")
+        : undefined
+
     const lineTotal = multiplier * cost
 
     for (const typeId of typeIds) {
@@ -371,6 +389,7 @@ function parseCSV(csvText: string): SheetData {
         multiplier,
         costPerUnit: cost,
         total: lineTotal,
+        ...(miscUnit !== undefined ? { miscUnit } : {}),
       })
     }
   }

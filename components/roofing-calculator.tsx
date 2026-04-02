@@ -14,9 +14,11 @@ import {
   RotateCcw,
   Layers,
   ChevronRight,
+  Download,
 } from "lucide-react"
 import type { RoofTypePricing, PricingData, PricingBreakdown, LineItemDetail, FeeConfig } from "@/lib/google-sheets"
 import { defaultPricing, defaultFeeConfig } from "@/lib/google-sheets"
+import { buildQuoteExportPayload } from "@/lib/quote-export"
 
 type RoofType = "vertical-seam" | "1-slr-panel" | "12-accent-panel" | "ultra-2000"
 
@@ -180,15 +182,26 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     const ventilationLength = Math.ceil(formData.ventilation)
     const snowRetentionLength = Math.ceil(formData.snowRetention)
 
-    const computeLineTotal = (rateKey: keyof PricingData, quantity: number) => {
+    const computeLineTotal = (
+      rateKey: keyof PricingData,
+      quantity: number,
+      roofSquaresForMisc?: number
+    ) => {
       const items = breakdown[rateKey]
       if (!items || items.length === 0) {
         return quantity * pricing[rateKey]
       }
 
       return items.reduce((sum, item) => {
-        if (quantity <= 0) return sum
-        const rawUnits = item.multiplier * quantity
+        let effectiveQty = quantity
+        if (rateKey === "miscFixedCost") {
+          const basis = item.miscUnit ?? "perJob"
+          effectiveQty = basis === "perSq" ? (roofSquaresForMisc ?? 0) : 1
+        } else if (quantity <= 0) {
+          return sum
+        }
+
+        const rawUnits = item.multiplier * effectiveQty
         const billableUnits = item.multiplier < 1 ? Math.ceil(rawUnits) : rawUnits
         return sum + billableUnits * item.costPerUnit
       }, 0)
@@ -227,7 +240,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     const pipeFlashing = computePipeFlashingTotal()
     const ventilation = computeLineTotal("ventilationRate", ventilationLength)
     const snowRetention = computeLineTotal("snowRetentionRate", snowRetentionLength)
-    const miscFixedCost = computeLineTotal("miscFixedCost", 1)
+    const miscFixedCost = computeLineTotal("miscFixedCost", 1, formData.squares)
 
     const materialSubtotal =
       squares + ridge + hip + eave + rake + valleys +
@@ -316,6 +329,37 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       salePrice,
     }
   }, [formData, pricing, fees, profitMarginPct])
+
+  const handleExportPdf = useCallback(() => {
+    const roofTypeName = roofTypes.find((t) => t.id === selectedRoofType)?.name ?? selectedRoofType
+    const payload = buildQuoteExportPayload({
+      roofTypeId: selectedRoofType,
+      roofTypeName,
+      formData,
+      hasCedarShake,
+      calculations,
+      fees,
+      profitMarginPct,
+      pipeLabels: {
+        upTo6: pipeLabelUpTo6,
+        upTo13: pipeLabelUpTo13,
+        upTo19: pipeLabelUpTo19,
+      },
+    })
+    void import("@/lib/quote-export-pdf").then(({ exportQuoteToPdf }) => {
+      exportQuoteToPdf(payload)
+    })
+  }, [
+    selectedRoofType,
+    formData,
+    hasCedarShake,
+    calculations,
+    fees,
+    profitMarginPct,
+    pipeLabelUpTo6,
+    pipeLabelUpTo13,
+    pipeLabelUpTo19,
+  ])
 
   const formatCurrency = (value: number) => {
     if (!Number.isFinite(value)) return "N/A"
@@ -679,10 +723,27 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                     Pricing and fees update dynamically from the connected spreadsheet. Final quote may vary based on site conditions.
                   </p>
 
-                  <Button variant="outline" onClick={handleReset} className="w-full gap-2">
-                    <RotateCcw className="size-4" />
-                    Reset
-                  </Button>
+                  <div className="flex flex-col gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full gap-2"
+                      disabled={calculations.invalidMarginTarget}
+                      title={
+                        calculations.invalidMarginTarget
+                          ? "Lower goal profit margin so sale price is valid before exporting."
+                          : undefined
+                      }
+                      onClick={handleExportPdf}
+                    >
+                      <Download className="size-4" />
+                      Export PDF
+                    </Button>
+                    <Button variant="outline" onClick={handleReset} className="w-full gap-2">
+                      <RotateCcw className="size-4" />
+                      Reset
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="mt-auto border-t bg-card px-6 py-4">
@@ -840,6 +901,7 @@ function BreakdownSection({
             pipeFlashingQtyUpTo19={Number(calculations.pipeFlashingQtyUpTo19 ?? 0)}
             steepPitchSquaresQty={Number(calculations.steepPitchSquaresQty ?? 0)}
             steepPitchAdder={Number(calculations.steepPitchAdder ?? 0)}
+            roofSquares={Number(calculations.squaresQty ?? 0)}
             expanded={expandedKeys.has(row.key)}
             onToggle={toggle}
           />
@@ -860,6 +922,7 @@ function ExpandableSummaryRow({
   pipeFlashingQtyUpTo19,
   steepPitchSquaresQty,
   steepPitchAdder,
+  roofSquares,
   expanded,
   onToggle,
 }: {
@@ -873,6 +936,8 @@ function ExpandableSummaryRow({
   pipeFlashingQtyUpTo19?: number
   steepPitchSquaresQty?: number
   steepPitchAdder?: number
+  /** Roofing squares (for Misc per-sq line items) */
+  roofSquares?: number
   expanded: boolean
   onToggle: (key: string) => void
 }) {
@@ -896,7 +961,13 @@ function ExpandableSummaryRow({
                 ? (pipeFlashingQtyUpTo6 ?? 0)
                 : 0)
           : null
-      const rawUnits = customPipeQty ?? (item.multiplier * quantity)
+      const miscEffectiveQty =
+        rateKey === "miscFixedCost"
+          ? (item.miscUnit === "perSq" ? (roofSquares ?? 0) : 1)
+          : null
+      const rawUnits =
+        customPipeQty ??
+        (miscEffectiveQty !== null ? item.multiplier * miscEffectiveQty : item.multiplier * quantity)
       const billableUnits = customPipeQty ?? (item.multiplier < 1 ? Math.ceil(rawUnits) : rawUnits)
       const total = item.costPerUnit * billableUnits
       const roundedNote = customPipeQty === null && item.multiplier < 1
