@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, useCallback, useEffect } from "react"
+import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -19,6 +19,13 @@ import {
 import type { RoofTypePricing, PricingData, PricingBreakdown, LineItemDetail, FeeConfig } from "@/lib/google-sheets"
 import { defaultPricing, defaultFeeConfig } from "@/lib/google-sheets"
 import { buildQuoteExportPayload } from "@/lib/quote-export"
+import { cn } from "@/lib/utils"
+import {
+  clearPersistedCalculatorState,
+  clampProfitMarginToFees,
+  loadPersistedCalculatorState,
+  savePersistedCalculatorState,
+} from "@/lib/roofing-calculator-persist"
 
 type RoofType = "vertical-seam" | "1-slr-panel" | "12-accent-panel" | "ultra-2000"
 
@@ -112,6 +119,55 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     }
   }, [formData.layers, hasCedarShake])
 
+  const persistReadyRef = useRef(false)
+  const persistGenerationRef = useRef(0)
+
+  useLayoutEffect(() => {
+    const saved = loadPersistedCalculatorState()
+    const fee = feeConfig ?? defaultFeeConfig
+    if (saved) {
+      setSelectedRoofType(saved.selectedRoofType)
+      setFormData(saved.formData)
+      setHasCedarShake(saved.hasCedarShake)
+      setProfitMarginPct(clampProfitMarginToFees(saved.profitMarginPct, fee))
+    }
+    persistReadyRef.current = true
+    // Intentionally once on mount — avoid re-applying storage when feeConfig updates
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!persistReadyRef.current) return
+    const slice = {
+      selectedRoofType,
+      formData,
+      hasCedarShake,
+      profitMarginPct,
+    }
+    const generation = persistGenerationRef.current
+    const id = window.setTimeout(() => {
+      if (generation !== persistGenerationRef.current) return
+      savePersistedCalculatorState(slice)
+    }, 300)
+    return () => window.clearTimeout(id)
+  }, [formData, selectedRoofType, hasCedarShake, profitMarginPct])
+
+  const pageHeaderRef = useRef<HTMLElement | null>(null)
+  const [summaryFillsViewport, setSummaryFillsViewport] = useState(false)
+
+  useEffect(() => {
+    const el = pageHeaderRef.current
+    if (!el || typeof IntersectionObserver === "undefined") return
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        setSummaryFillsViewport(!entry.isIntersecting)
+      },
+      { threshold: 0 },
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [])
+
   const handleInputChange = (field: keyof FormData, value: string) => {
     const numValue = value === "" ? 0 : parseFloat(value)
     const safeValue = isNaN(numValue) ? 0 : numValue
@@ -154,6 +210,8 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
   }
 
   const handleReset = () => {
+    persistGenerationRef.current += 1
+    clearPersistedCalculatorState()
     setFormData(initialFormData)
     setHasCedarShake(false)
     setSelectedRoofType("vertical-seam")
@@ -348,6 +406,8 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     })
     void import("@/lib/quote-export-pdf").then(({ exportQuoteToPdf }) => {
       exportQuoteToPdf(payload)
+      persistGenerationRef.current += 1
+      clearPersistedCalculatorState()
     })
   }, [
     selectedRoofType,
@@ -372,7 +432,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b bg-card">
+      <header ref={pageHeaderRef} className="border-b bg-card">
         <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-col gap-2">
@@ -581,8 +641,22 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
             </Card>
           </div>
 
-          <div className="lg:sticky lg:top-8 lg:h-fit">
-            <Card className="border-2 shadow-lg md:max-h-[calc(100vh-11rem)] md:overflow-hidden md:flex md:flex-col">
+          <div
+            className={cn(
+              "lg:sticky lg:top-8",
+              summaryFillsViewport
+                ? "lg:flex lg:h-[calc(100vh-4rem)] lg:flex-col"
+                : "lg:h-fit",
+            )}
+          >
+            <Card
+              className={cn(
+                "border-2 shadow-lg md:overflow-hidden md:flex md:flex-col",
+                summaryFillsViewport
+                  ? "lg:h-full lg:min-h-0 lg:max-h-none"
+                  : "md:max-h-[calc(100vh-11rem)]",
+              )}
+            >
               <CardHeader className="pb-4">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-lg">Estimate Summary</CardTitle>
