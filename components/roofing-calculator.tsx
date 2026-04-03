@@ -49,6 +49,8 @@ interface FormData {
   snowRetention: number
 }
 
+const EMPTY_PRICING_BREAKDOWN: PricingBreakdown = {}
+
 const initialFormData: FormData = {
   squares: 0,
   steepPitchSquares: 0,
@@ -223,7 +225,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     ?? { rates: defaultPricing, breakdown: {} }
 
   const pricing: PricingData = entry.rates ?? defaultPricing
-  const breakdown: PricingBreakdown = entry.breakdown ?? {}
+  const breakdown: PricingBreakdown = entry.breakdown ?? EMPTY_PRICING_BREAKDOWN
   const pipeItems = breakdown.pipeFlashingRate ?? []
   const pipeLabelUpTo6 = pipeItems.find((i) => i.name.toLowerCase().includes("up to 6"))?.name ?? 'Pipe Flashing up to 6"'
   const pipeLabelUpTo13 = pipeItems.find((i) => i.name.toLowerCase().includes("up to 13"))?.name ?? 'High Temp Pipe Flashing up to 13"'
@@ -396,6 +398,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       formData,
       hasCedarShake,
       calculations,
+      breakdown,
       fees,
       profitMarginPct,
       pipeLabels: {
@@ -414,6 +417,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
     formData,
     hasCedarShake,
     calculations,
+    breakdown,
     fees,
     profitMarginPct,
     pipeLabelUpTo6,

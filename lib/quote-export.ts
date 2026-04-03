@@ -1,4 +1,4 @@
-import type { FeeConfig } from "@/lib/google-sheets"
+import type { FeeConfig, LineItemDetail, PricingBreakdown, PricingData } from "@/lib/google-sheets"
 
 /** Mirrors calculator form fields for JSON / LP reuse */
 export interface QuoteFormSnapshot {
@@ -22,6 +22,37 @@ export interface QuoteFormSnapshot {
 }
 
 export interface QuoteCalculationsSnapshot {
+  squaresQty: number
+  steepPitchSquaresQty: number
+  steepPitchAdder: number
+  ridgeQty: number
+  hipQty: number
+  eaveQty: number
+  rakeQty: number
+  valleysQty: number
+  wallFlashingQty: number
+  stepFlashingQty: number
+  pitchChangeQty: number
+  pipeFlashingQty: number
+  pipeFlashingQtyUpTo6: number
+  pipeFlashingQtyUpTo13: number
+  pipeFlashingQtyUpTo19: number
+  ventilationQty: number
+  snowRetentionQty: number
+  miscFixedCostQty: number
+  squares: number
+  ridge: number
+  hip: number
+  eave: number
+  rake: number
+  valleys: number
+  wallFlashing: number
+  stepFlashing: number
+  pitchChange: number
+  pipeFlashing: number
+  ventilation: number
+  snowRetention: number
+  miscFixedCost: number
   dumpsterSquaresForTier: number
   weightedLayers: number
   materialSubtotal: number
@@ -38,12 +69,17 @@ export interface QuoteCalculationsSnapshot {
   invalidMarginTarget: boolean
 }
 
+/** Rows for autoTable: strings or cell objects with colSpan */
+export type QuoteMaterialListCell = string | { content: string; colSpan?: number; styles?: { fontStyle?: string } }
+
 export interface QuoteExportPayload {
   generatedAt: string
   roofTypeId: string
   roofTypeName: string
   hasCedarShake: boolean
   measurements: { label: string; value: string }[]
+  /** Right column: detailed material lines (mirrors in-app Materials breakdown) */
+  materialListBody: QuoteMaterialListCell[][]
   feePercentages: {
     commissionPct: number
     financingPct: number
@@ -81,12 +117,116 @@ function formatCompactNumber(n: number): string {
   return parseFloat(s).toString()
 }
 
+const MATERIAL_RATE_ROWS: readonly {
+  rateKey: keyof PricingData
+  label: string
+  calcKey: keyof QuoteCalculationsSnapshot
+  quantityKey: keyof QuoteCalculationsSnapshot
+}[] = [
+  { rateKey: "squareRate", label: "Squares", calcKey: "squares", quantityKey: "squaresQty" },
+  { rateKey: "ridgeRate", label: "Ridge", calcKey: "ridge", quantityKey: "ridgeQty" },
+  { rateKey: "hipRate", label: "Hip", calcKey: "hip", quantityKey: "hipQty" },
+  { rateKey: "eaveRate", label: "Eaves", calcKey: "eave", quantityKey: "eaveQty" },
+  { rateKey: "rakeRate", label: "Rakes", calcKey: "rake", quantityKey: "rakeQty" },
+  { rateKey: "valleyRate", label: "Valleys", calcKey: "valleys", quantityKey: "valleysQty" },
+  { rateKey: "wallFlashingRate", label: "Wall Flashing", calcKey: "wallFlashing", quantityKey: "wallFlashingQty" },
+  { rateKey: "stepFlashingRate", label: "Step Flashing", calcKey: "stepFlashing", quantityKey: "stepFlashingQty" },
+  { rateKey: "pitchChangeRate", label: "Pitch Changes", calcKey: "pitchChange", quantityKey: "pitchChangeQty" },
+  { rateKey: "pipeFlashingRate", label: "Pipe Flashing", calcKey: "pipeFlashing", quantityKey: "pipeFlashingQty" },
+  { rateKey: "ventilationRate", label: "Ventilation", calcKey: "ventilation", quantityKey: "ventilationQty" },
+  { rateKey: "snowRetentionRate", label: "Snow Retention", calcKey: "snowRetention", quantityKey: "snowRetentionQty" },
+  { rateKey: "miscFixedCost", label: "Misc Materials", calcKey: "miscFixedCost", quantityKey: "miscFixedCostQty" },
+]
+
+function buildDetailLines(
+  rateKey: string,
+  items: LineItemDetail[] | undefined,
+  quantity: number,
+  c: QuoteCalculationsSnapshot,
+): { name: string; unit: number; qty: number; total: number }[] {
+  const detailRows = (items ?? []).map((item) => {
+    const name = item.name.toLowerCase()
+    const customPipeQty =
+      rateKey === "pipeFlashingRate"
+        ? name.includes("up to 19")
+          ? c.pipeFlashingQtyUpTo19
+          : name.includes("up to 13")
+            ? c.pipeFlashingQtyUpTo13
+            : name.includes("up to 6")
+              ? c.pipeFlashingQtyUpTo6
+              : 0
+        : null
+    const miscEffectiveQty =
+      rateKey === "miscFixedCost"
+        ? item.miscUnit === "perSq"
+          ? c.squaresQty
+          : 1
+        : null
+    const rawUnits =
+      customPipeQty != null
+        ? customPipeQty
+        : miscEffectiveQty != null
+          ? item.multiplier * miscEffectiveQty
+          : item.multiplier * quantity
+    const billableUnits =
+      customPipeQty != null ? customPipeQty : item.multiplier < 1 ? Math.ceil(rawUnits) : rawUnits
+    const total = item.costPerUnit * billableUnits
+    return { name: item.name, unit: item.costPerUnit, qty: billableUnits, total }
+  })
+
+  if (rateKey === "squareRate" && c.steepPitchSquaresQty > 0 && c.steepPitchAdder > 0) {
+    const steepQty = c.steepPitchSquaresQty
+    const steepUnitAdder = c.steepPitchAdder / steepQty
+    detailRows.push({
+      name: "Steep Pitch Adder (10%)",
+      unit: steepUnitAdder,
+      qty: steepQty,
+      total: steepUnitAdder * steepQty,
+    })
+  }
+  return detailRows
+}
+
+function buildMaterialListBody(
+  breakdown: PricingBreakdown,
+  calculations: QuoteCalculationsSnapshot,
+): QuoteMaterialListCell[][] {
+  const rows: QuoteMaterialListCell[][] = []
+  for (const def of MATERIAL_RATE_ROWS) {
+    const items = breakdown[def.rateKey]
+    const quantity = Number(calculations[def.quantityKey])
+    const categoryTotal = Number(calculations[def.calcKey])
+    rows.push([
+      {
+        content: `${def.label} — ${formatCurrency(categoryTotal)}`,
+        colSpan: 4,
+        styles: { fontStyle: "bold" },
+      },
+    ])
+    const details = buildDetailLines(def.rateKey, items, quantity, calculations)
+    if (details.length === 0) {
+      rows.push(["  (Pricing bundle — no itemized lines)", "", "", ""])
+    } else {
+      for (const d of details) {
+        rows.push([
+          `  ${d.name}`,
+          formatCurrency(d.unit),
+          formatCompactNumber(d.qty),
+          formatCurrency(d.total),
+        ])
+      }
+    }
+  }
+  return rows
+}
+
 export function buildQuoteExportPayload(params: {
   roofTypeId: string
   roofTypeName: string
   formData: QuoteFormSnapshot
   hasCedarShake: boolean
   calculations: QuoteCalculationsSnapshot
+  breakdown: PricingBreakdown
   fees: FeeConfig
   profitMarginPct: number
   pipeLabels: { upTo6: string; upTo13: string; upTo19: string }
@@ -97,6 +237,7 @@ export function buildQuoteExportPayload(params: {
     formData,
     hasCedarShake,
     calculations,
+    breakdown,
     fees,
     profitMarginPct,
     pipeLabels,
@@ -134,6 +275,7 @@ export function buildQuoteExportPayload(params: {
     roofTypeName,
     hasCedarShake,
     measurements,
+    materialListBody: buildMaterialListBody(breakdown, calculations),
     feePercentages: {
       commissionPct: fees.commissionPct,
       financingPct: fees.financingPct,

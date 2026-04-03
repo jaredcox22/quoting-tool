@@ -28,33 +28,63 @@ function formatGeneratedAt(iso: string): string {
   })
 }
 
+function lastAutoTableFinalY(doc: jsPDF): number {
+  return (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY
+}
+
+/** Match header + body row metrics across all PDF tables (compact, identical sizing) */
+const SHARED_TABLE_STYLES = {
+  theme: "striped" as const,
+  styles: {
+    fontSize: 7.5,
+    cellPadding: 2,
+    halign: "left" as const,
+    valign: "middle" as const,
+    overflow: "linebreak" as const,
+  },
+  headStyles: {
+    fillColor: [66, 66, 66] as [number, number, number],
+    halign: "left" as const,
+    valign: "middle" as const,
+    fontSize: 7.5,
+    cellPadding: 2,
+  },
+}
+
 export function exportQuoteToPdf(payload: QuoteExportPayload): void {
   const doc = new jsPDF({ unit: "pt", format: "letter" })
   const pageW = doc.internal.pageSize.getWidth()
-  let y = 48
+  const pageH = doc.internal.pageSize.getHeight()
+  const margin = 40
+  const gutter = 10
+  const leftColW = 246
+  /** Distance from page right edge — table width = pageW - margin - leftMargin */
+  const leftTableRightMargin = pageW - margin - leftColW
+  const rightTableLeft = margin + leftColW + gutter
 
-  doc.setFontSize(18)
+  let y = margin
+
+  doc.setFontSize(16)
   doc.text("Standing Seam Estimate", pageW / 2, y, { align: "center" })
-  y += 28
-
-  doc.setFontSize(11)
+  y += 22
+  doc.setFontSize(10)
   doc.setFont("helvetica", "normal")
-  const generated = formatGeneratedAt(payload.generatedAt)
-  doc.text(`Roof type: ${payload.roofTypeName}`, 48, y)
-  y += 16
-  doc.text(`Generated: ${generated}`, 48, y)
-  y += 24
+  doc.text(`Roof type: ${payload.roofTypeName}`, margin, y)
+  y += 14
+  doc.text(`Generated: ${formatGeneratedAt(payload.generatedAt)}`, margin, y)
+  y += 18
+
+  const yTables = y
 
   autoTable(doc, {
-    startY: y,
-    head: [["Field", "Value"]],
+    startY: yTables,
+    margin: { left: margin, right: leftTableRightMargin },
+    head: [["Project Measurements", "Value"]],
     body: payload.measurements.map((m) => [m.label, m.value]),
-    theme: "striped",
-    styles: { fontSize: 9, cellPadding: 4, halign: "left" },
-    headStyles: { fillColor: [66, 66, 66], halign: "left" },
+    ...SHARED_TABLE_STYLES,
     columnStyles: {
-      0: { cellWidth: 220, halign: "left" },
-      1: { cellWidth: "auto", halign: "right" },
+      0: { cellWidth: 138, halign: "left" },
+      1: { halign: "right" },
     },
     didParseCell: (data) => {
       if (data.section === "head" && data.column.index === 1) {
@@ -63,16 +93,12 @@ export function exportQuoteToPdf(payload: QuoteExportPayload): void {
     },
   })
 
-  const docWithTable = doc as jsPDF & { lastAutoTable: { finalY: number } }
-  y = docWithTable.lastAutoTable.finalY + 20
+  const yAfterMeasurements = lastAutoTableFinalY(doc)
 
   const feeRows: (string | number)[][] = [
     ["Material subtotal", formatCurrency(payload.totals.materialSubtotal)],
     ["Sub labor", formatCurrency(payload.totals.subLabor)],
-    [
-      `Dumpster fee`,
-      formatCurrency(payload.totals.dumpsterFee),
-    ],
+    ["Dumpster fee", formatCurrency(payload.totals.dumpsterFee)],
     ["Satellite", formatCurrency(payload.totals.satellite)],
     ["Permits", formatCurrency(payload.totals.permits)],
     [
@@ -88,10 +114,7 @@ export function exportQuoteToPdf(payload: QuoteExportPayload): void {
       `Commission (${formatCompactNumber(payload.feePercentages.commissionPct)}%)`,
       formatCurrency(payload.totals.commission),
     ],
-    [
-      "Goal profit margin (target)",
-      `${formatCompactNumber(payload.feePercentages.goalProfitMarginPct)}%`,
-    ],
+    ["Goal profit margin (target)", `${formatCompactNumber(payload.feePercentages.goalProfitMarginPct)}%`],
     ["Expected profit", formatCurrency(payload.totals.profit)],
     ["Sale price", formatCurrency(payload.totals.salePrice)],
   ]
@@ -101,15 +124,14 @@ export function exportQuoteToPdf(payload: QuoteExportPayload): void {
   }
 
   autoTable(doc, {
-    startY: y,
+    startY: yAfterMeasurements + 12,
+    margin: { left: margin, right: leftTableRightMargin },
     head: [["Line item", "Amount"]],
     body: feeRows,
-    theme: "striped",
-    styles: { fontSize: 9, cellPadding: 4, halign: "left" },
-    headStyles: { fillColor: [66, 66, 66], halign: "left" },
+    ...SHARED_TABLE_STYLES,
     columnStyles: {
-      0: { cellWidth: 280, halign: "left" },
-      1: { cellWidth: "auto", halign: "right" },
+      0: { cellWidth: 142, halign: "left" },
+      1: { halign: "right" },
     },
     didParseCell: (data) => {
       if (data.section === "head" && data.column.index === 1) {
@@ -118,16 +140,64 @@ export function exportQuoteToPdf(payload: QuoteExportPayload): void {
     },
   })
 
-  y = docWithTable.lastAutoTable.finalY + 16
-  doc.setFontSize(8)
-  doc.setTextColor(100)
+  const yLeftBottom = lastAutoTableFinalY(doc)
+
+  const materialBody = normalizeMaterialBodyForAutoTable(payload.materialListBody)
+
+  autoTable(doc, {
+    startY: yTables,
+    margin: { left: rightTableLeft, right: margin },
+    head: [["Material List", "Unit", "Qty", "Amt"]],
+    body: materialBody,
+    ...SHARED_TABLE_STYLES,
+    columnStyles: {
+      0: { cellWidth: 118, halign: "left" },
+      1: { cellWidth: 46, halign: "right" },
+      2: { cellWidth: 28, halign: "right" },
+      3: { halign: "right" },
+    },
+    didParseCell: (data) => {
+      if (data.section === "head" && data.column.index >= 1) {
+        data.cell.styles.halign = data.column.index === 1 || data.column.index === 2 || data.column.index === 3 ? "right" : "left"
+      }
+      if (data.section === "body" && data.column.index >= 1) {
+        data.cell.styles.halign = "right"
+      }
+    },
+  })
+
+  const yRightBottom = lastAutoTableFinalY(doc)
+  let yFooter = Math.max(yLeftBottom, yRightBottom) + 12
+
   const disclaimer =
     "Pricing and fees reflect the calculator at export time. Final quote may vary based on site conditions."
-  const split = doc.splitTextToSize(disclaimer, pageW - 96)
-  doc.text(split, 48, y)
+  doc.setFontSize(7)
+  doc.setTextColor(100)
+  const split = doc.splitTextToSize(disclaimer, pageW - margin * 2)
+  const disclaimerH = split.length * 8.5
+  if (yFooter + disclaimerH > pageH - margin) {
+    yFooter = pageH - margin - disclaimerH
+  }
+  doc.text(split, margin, yFooter)
 
   const safeId = payload.roofTypeId.replace(/[^a-z0-9-]+/gi, "-")
   const d = new Date(payload.generatedAt)
   const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
   doc.save(`roof-quote-${safeId}-${dateStr}.pdf`)
+}
+
+/** Coerce QuoteMaterialListCell rows into autoTable's expected body format */
+function normalizeMaterialBodyForAutoTable(
+  rows: QuoteMaterialListCell[][],
+): (string | Record<string, unknown>)[][] {
+  return rows.map((row) =>
+    row.map((cell) => {
+      if (typeof cell === "string") return cell
+      return {
+        content: cell.content,
+        colSpan: cell.colSpan,
+        styles: cell.styles,
+      }
+    }),
+  )
 }
