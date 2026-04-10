@@ -15,9 +15,11 @@ import {
   Layers,
   ChevronRight,
   Download,
+  Loader2,
 } from "lucide-react"
 import type { RoofTypePricing, PricingData, PricingBreakdown, LineItemDetail, FeeConfig } from "@/lib/google-sheets"
-import { defaultPricing, defaultFeeConfig } from "@/lib/google-sheets"
+import { defaultPricing, defaultFeeConfig, defaultSheetData, loadSheetDataFromEnv } from "@/lib/google-sheets"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { buildQuoteExportPayload } from "@/lib/quote-export"
 import { cn } from "@/lib/utils"
 import {
@@ -94,12 +96,12 @@ const roofTypes = [
   },
 ]
 
-interface RoofingCalculatorProps {
-  pricingByType: RoofTypePricing
-  feeConfig: FeeConfig
-}
+export default function RoofingCalculator() {
+  const [pricingByType, setPricingByType] = useState<RoofTypePricing>(() => defaultSheetData().pricing)
+  const [feeConfig, setFeeConfig] = useState<FeeConfig>(() => defaultFeeConfig)
+  const [sheetStatus, setSheetStatus] = useState<"loading" | "ready">("loading")
+  const [sheetUsedFallback, setSheetUsedFallback] = useState(false)
 
-export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingCalculatorProps) {
   const [selectedRoofType, setSelectedRoofType] = useState<RoofType>("vertical-seam")
   const [formData, setFormData] = useState<FormData>(initialFormData)
   const [hasCedarShake, setHasCedarShake] = useState(false)
@@ -113,6 +115,25 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
   useEffect(() => {
     setProfitMarginPct((prev) => Math.min(prev, maxGoalProfitMargin))
   }, [maxGoalProfitMargin])
+
+  useEffect(() => {
+    let cancelled = false
+    void loadSheetDataFromEnv().then(({ data, usedFallback }) => {
+      if (cancelled) return
+      setPricingByType(data.pricing)
+      setFeeConfig(data.fees)
+      setSheetUsedFallback(usedFallback)
+      setSheetStatus("ready")
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    const fee = feeConfig ?? defaultFeeConfig
+    setProfitMarginPct((prev) => clampProfitMarginToFees(prev, fee))
+  }, [feeConfig])
 
   useEffect(() => {
     if (formData.layers <= 0 && hasCedarShake) {
@@ -435,7 +456,17 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="relative min-h-screen bg-background">
+      {sheetStatus === "loading" && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background/80 backdrop-blur-sm"
+          aria-busy="true"
+          aria-live="polite"
+        >
+          <Loader2 className="size-10 animate-spin text-muted-foreground" aria-hidden />
+          <p className="text-sm text-muted-foreground">Loading pricing…</p>
+        </div>
+      )}
       <header ref={pageHeaderRef} className="border-b bg-card">
         <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -454,6 +485,14 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        {sheetUsedFallback && sheetStatus === "ready" && (
+          <Alert className="mb-6" variant="default">
+            <AlertTitle>Using default pricing</AlertTitle>
+            <AlertDescription>
+              The Google Sheet could not be loaded or is not configured. Values shown use built-in defaults.
+            </AlertDescription>
+          </Alert>
+        )}
         <div className="grid gap-8 lg:grid-cols-[1fr_400px]">
           <div className="flex flex-col gap-8">
             <section>

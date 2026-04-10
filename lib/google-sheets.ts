@@ -429,25 +429,35 @@ export async function fetchSheetData(
   return parseCSV(csvText)
 }
 
-export async function getSheetData(): Promise<SheetData> {
-  const sheetId = process.env.GOOGLE_SHEET_ID
-  const gid = process.env.GOOGLE_SHEET_GID
+/** Same fallback shape as when the sheet is unavailable (parse errors, missing env, etc.). */
+export function defaultSheetData(): SheetData {
+  return {
+    pricing: { "vertical-seam": { rates: defaultPricing, breakdown: {} } },
+    fees: defaultFeeConfig,
+  }
+}
+
+/**
+ * Loads pricing from Google Sheets using NEXT_PUBLIC_* env vars (available in the browser).
+ * IDs are embedded in the client bundle — the sheet must be acceptable as publicly readable.
+ */
+export async function loadSheetDataFromEnv(): Promise<{
+  data: SheetData
+  usedFallback: boolean
+}> {
+  const sheetId = process.env.NEXT_PUBLIC_GOOGLE_SHEET_ID
+  const gid = process.env.NEXT_PUBLIC_GOOGLE_SHEET_GID
 
   if (!sheetId || !gid) {
     console.warn("Google Sheet config missing, using defaults")
-    return {
-      pricing: { "vertical-seam": { rates: defaultPricing, breakdown: {} } },
-      fees: defaultFeeConfig,
-    }
+    return { data: defaultSheetData(), usedFallback: true }
   }
 
   try {
-    return await fetchSheetData(sheetId, gid)
+    const data = await fetchSheetData(sheetId, gid)
+    return { data, usedFallback: false }
   } catch (error) {
     console.warn("Failed to fetch sheet data, using defaults:", error)
-    return {
-      pricing: { "vertical-seam": { rates: defaultPricing, breakdown: {} } },
-      fees: defaultFeeConfig,
-    }
+    return { data: defaultSheetData(), usedFallback: true }
   }
 }
