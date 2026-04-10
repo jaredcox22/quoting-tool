@@ -670,8 +670,8 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                 </div>
               </CardHeader>
               <CardContent className="flex flex-col gap-0 p-0 md:min-h-0 md:flex-1">
-                {/* <div className="flex flex-col gap-6 px-6 pb-4 md:min-h-0 md:flex-1 md:overflow-y-auto">
-                  <BreakdownSection calculations={calculations} breakdown={breakdown} />
+                <div className="flex flex-col gap-6 px-6 pb-4 md:min-h-0 md:flex-1 md:overflow-y-auto">
+                {/*   <BreakdownSection calculations={calculations} breakdown={breakdown} />
 
                 <Separator />
 
@@ -800,6 +800,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                   <p className="text-xs text-muted-foreground text-center leading-relaxed">
                     Pricing and fees update dynamically from the connected spreadsheet. Final quote may vary based on site conditions.
                   </p>
+                   */}
 
                   <div className="flex flex-col gap-2">
                     <Button
@@ -822,7 +823,7 @@ export default function RoofingCalculator({ pricingByType, feeConfig }: RoofingC
                       Reset
                     </Button>
                   </div>
-                </div> */}
+                </div>
 
                 <div className="mt-auto border-t bg-card px-6 py-4">
                   <div className="rounded-xl bg-primary p-4">
