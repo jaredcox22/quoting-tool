@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from "react"
+import { useSearchParams } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -97,6 +98,9 @@ const roofTypes = [
 ]
 
 export default function RoofingCalculator() {
+  const searchParams = useSearchParams()
+  const admin = searchParams.get("admin") === "true"
+
   const [pricingByType, setPricingByType] = useState<RoofTypePricing>(() => defaultSheetData().pricing)
   const [feeConfig, setFeeConfig] = useState<FeeConfig>(() => defaultFeeConfig)
   const [sheetStatus, setSheetStatus] = useState<"loading" | "ready">("loading")
@@ -330,7 +334,8 @@ export default function RoofingCalculator() {
 
     const subLaborPanels = formData.squares * fees.subLaborPerSquare
     const subLaborRidge = ridgeLength * fees.subLaborPerRidgeFt
-    const subLabor = subLaborPanels + subLaborRidge
+    const subLaborCedarShake = formData.cedarShakeLayers * fees.subLaborCedarShake
+    const subLabor = subLaborPanels + subLaborRidge + subLaborCedarShake
 
     const effectiveCedarShakeLayers = hasCedarShake
       ? Math.min(formData.cedarShakeLayers, formData.layers)
@@ -710,7 +715,9 @@ export default function RoofingCalculator() {
               </CardHeader>
               <CardContent className="flex flex-col gap-0 p-0 md:min-h-0 md:flex-1">
                 <div className="flex flex-col gap-6 px-6 pb-4 md:min-h-0 md:flex-1 md:overflow-y-auto">
-                {/*   <BreakdownSection calculations={calculations} breakdown={breakdown} />
+                  {admin && (
+                    <>
+                      <BreakdownSection calculations={calculations} breakdown={breakdown} />
 
                 <Separator />
 
@@ -839,7 +846,8 @@ export default function RoofingCalculator() {
                   <p className="text-xs text-muted-foreground text-center leading-relaxed">
                     Pricing and fees update dynamically from the connected spreadsheet. Final quote may vary based on site conditions.
                   </p>
-                   */}
+                  </>
+                )}
 
                   <div className="flex flex-col gap-2">
                     <Button

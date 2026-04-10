@@ -51,6 +51,7 @@ export interface FeeConfig {
   dumpsterTiers: DumpsterTier[]
   subLaborPerSquare: number
   subLaborPerRidgeFt: number
+  subLaborCedarShake: number
 }
 
 export interface SheetData {
@@ -90,6 +91,7 @@ export const defaultFeeConfig: FeeConfig = {
   ],
   subLaborPerSquare: 200,
   subLaborPerRidgeFt: 0.5,
+  subLaborCedarShake: 138.25,
 }
 
 function zeroPricing(): PricingData {
@@ -313,6 +315,8 @@ function parseCSV(csvText: string): SheetData {
           fees.subLaborPerSquare = cost
         } else if (lower.includes("ridge")) {
           fees.subLaborPerRidgeFt = cost
+        } else if (lower.includes("cedar shake")) {
+          fees.subLaborCedarShake = cost
         }
       }
       continue
