@@ -130,9 +130,29 @@ interface QuoteSearchResults {
   customersTruncated: boolean
 }
 
+function emptyCustomer(cstId: string): QuoteCustomer {
+  return {
+    cst_id: cstId,
+    first_name: "",
+    last_name: "",
+    address1: "",
+    address2: "",
+    city: "",
+    state: "",
+    zip: "",
+  }
+}
+
 function customerLabel(customer: QuoteCustomer): string {
   const name = `${customer.first_name} ${customer.last_name}`.trim()
   return name || `Customer ${customer.cst_id}`
+}
+
+function customerAddress(customer: QuoteCustomer): string {
+  const street = [customer.address1, customer.address2].filter(Boolean).join(", ")
+  const cityState = [customer.city, customer.state].filter(Boolean).join(", ")
+  const cityStateZip = [cityState, customer.zip].filter(Boolean).join(" ")
+  return [street, cityStateZip].filter(Boolean).join(", ")
 }
 
 function searchResultGroups(results: QuoteSearchResults): { customer: QuoteCustomer; quotes: SavedQuote[] }[] {
@@ -152,7 +172,7 @@ function searchResultGroups(results: QuoteSearchResults): { customer: QuoteCusto
     for (const [cstId, quotes] of quotesByCustomer) {
       if (!known.has(cstId)) {
         groups.push({
-          customer: { cst_id: cstId, first_name: "", last_name: "", cust_number: null },
+          customer: emptyCustomer(cstId),
           quotes,
         })
       }
@@ -168,7 +188,7 @@ function searchResultGroups(results: QuoteSearchResults): { customer: QuoteCusto
   const cstId = "cstId" in results.query ? results.query.cstId : (results.quotes[0]?.cst_id ?? "")
   return [
     {
-      customer: { cst_id: cstId, first_name: "", last_name: "", cust_number: null },
+      customer: emptyCustomer(cstId),
       quotes: results.quotes,
     },
   ]
@@ -1648,9 +1668,7 @@ function QuoteSearchForm({
           Search
         </Button>
       </div>
-      <p className={cn("text-xs leading-relaxed", error ? "text-red-600" : "text-muted-foreground")}>
-        {error ?? "Search by customer id, or any part of a name."}
-      </p>
+      {error && <p className="text-xs leading-relaxed text-red-600">{error}</p>}
     </form>
   )
 }
@@ -1702,11 +1720,11 @@ function QuoteSearchResultsView({
           <section key={group.customer.cst_id} className="flex flex-col gap-3">
             <div className="flex flex-col gap-0.5">
               <h3 className="font-semibold text-foreground">{customerLabel(group.customer)}</h3>
-              {(`${group.customer.first_name} ${group.customer.last_name}`.trim() || group.customer.cust_number) && (
-                <p className="text-sm text-muted-foreground">
-                  Customer {group.customer.cst_id}
-                  {group.customer.cust_number ? ` · Customer number ${group.customer.cust_number}` : ""}
-                </p>
+              {`${group.customer.first_name} ${group.customer.last_name}`.trim() && (
+                <p className="text-sm text-muted-foreground">Customer {group.customer.cst_id}</p>
+              )}
+              {customerAddress(group.customer) && (
+                <p className="text-sm text-muted-foreground">{customerAddress(group.customer)}</p>
               )}
             </div>
             <Button type="button" className="w-full gap-2" onClick={() => onStartEstimate(group.customer.cst_id)}>

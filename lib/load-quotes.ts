@@ -236,7 +236,11 @@ export interface QuoteCustomer {
   cst_id: string
   first_name: string
   last_name: string
-  cust_number: string | null
+  address1: string
+  address2: string
+  city: string
+  state: string
+  zip: string
 }
 
 export interface LoadQuotesResult {
@@ -264,12 +268,16 @@ function parseCustomer(value: unknown): QuoteCustomer | null {
   const row = value as Record<string, unknown>
   const cstId = row.cst_id == null ? "" : String(row.cst_id).trim()
   if (!cstId) return null
-  const custNumber = row.cust_number == null || row.cust_number === "" ? null : String(row.cust_number).trim()
+  const text = (key: string) => (typeof row[key] === "string" ? row[key].trim() : "")
   return {
     cst_id: cstId,
-    first_name: typeof row.first_name === "string" ? row.first_name : "",
-    last_name: typeof row.last_name === "string" ? row.last_name : "",
-    cust_number: custNumber || null,
+    first_name: text("first_name"),
+    last_name: text("last_name"),
+    address1: text("address1"),
+    address2: text("address2"),
+    city: text("city"),
+    state: text("state"),
+    zip: text("zip"),
   }
 }
 
