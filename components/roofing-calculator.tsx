@@ -14,14 +14,28 @@ import {
   Ruler,
   RotateCcw,
   Layers,
+  ChevronLeft,
   ChevronRight,
   Download,
   Loader2,
+  Plus,
+  Save,
 } from "lucide-react"
 import type { RoofTypePricing, PricingData, PricingBreakdown, LineItemDetail, FeeConfig } from "@/lib/google-sheets"
 import { defaultPricing, defaultFeeConfig, defaultSheetData, loadSheetDataFromEnv } from "@/lib/google-sheets"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { buildQuoteExportPayload } from "@/lib/quote-export"
+import { buildSaveQuoteBody, saveQuote } from "@/lib/save-quote"
+import {
+  breakdownFromSavedQuote,
+  calculationsFromSavedQuote,
+  feeConfigFromSavedQuote,
+  formDataFromSavedQuote,
+  formatQuoteMoney,
+  formatQuoteSavedAt,
+  loadQuotes,
+  type SavedQuote,
+} from "@/lib/load-quotes"
 import { cn } from "@/lib/utils"
 import {
   clearPersistedCalculatorState,
@@ -30,7 +44,16 @@ import {
   savePersistedCalculatorState,
 } from "@/lib/roofing-calculator-persist"
 
-type RoofType = "vertical-seam" | "1-slr-panel" | "ultra-2000"
+type RoofType = "vertical-seam" | "1-slr-panel" | "12-accent-panel" | "ultra-2000"
+
+function isRoofType(value: string): value is RoofType {
+  return (
+    value === "vertical-seam" ||
+    value === "1-slr-panel" ||
+    value === "12-accent-panel" ||
+    value === "ultra-2000"
+  )
+}
 
 interface FormData {
   squares: number
@@ -95,6 +118,7 @@ const roofTypes = [
 export default function RoofingCalculator() {
   const searchParams = useSearchParams()
   const admin = searchParams.get("admin") === "true"
+  const cstId = (searchParams.get("cst_id") ?? "").trim()
 
   const [pricingByType, setPricingByType] = useState<RoofTypePricing>(() => defaultSheetData().pricing)
   const [feeConfig, setFeeConfig] = useState<FeeConfig>(() => defaultFeeConfig)
@@ -104,6 +128,14 @@ export default function RoofingCalculator() {
   const [selectedRoofType, setSelectedRoofType] = useState<RoofType>("vertical-seam")
   const [formData, setFormData] = useState<FormData>(initialFormData)
   const [hasCedarShake, setHasCedarShake] = useState(false)
+  const [savingQuote, setSavingQuote] = useState(false)
+  const [saveMessage, setSaveMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null)
+  const [savedQuotes, setSavedQuotes] = useState<SavedQuote[]>([])
+  const [quotesStatus, setQuotesStatus] = useState<"loading" | "ready" | "error">(cstId ? "loading" : "ready")
+  const [quotesError, setQuotesError] = useState<string | null>(null)
+  const [chooserOpen, setChooserOpen] = useState(false)
+  const [frozenQuote, setFrozenQuote] = useState<SavedQuote | null>(null)
+  const [quoteLoadId, setQuoteLoadId] = useState(0)
 
   const fees = feeConfig ?? defaultFeeConfig
   const maxGoalProfitMargin = Math.max(0, Math.floor(99 - fees.commissionPct))
@@ -112,8 +144,9 @@ export default function RoofingCalculator() {
   )
 
   useEffect(() => {
+    if (frozenQuote) return
     setProfitMarginPct((prev) => Math.min(prev, maxGoalProfitMargin))
-  }, [maxGoalProfitMargin])
+  }, [maxGoalProfitMargin, frozenQuote])
 
   useEffect(() => {
     let cancelled = false
@@ -130,9 +163,10 @@ export default function RoofingCalculator() {
   }, [])
 
   useEffect(() => {
+    if (frozenQuote) return
     const fee = feeConfig ?? defaultFeeConfig
     setProfitMarginPct((prev) => clampProfitMarginToFees(prev, fee))
-  }, [feeConfig])
+  }, [feeConfig, frozenQuote])
 
   useEffect(() => {
     if (formData.layers <= 0 && hasCedarShake) {
@@ -145,6 +179,10 @@ export default function RoofingCalculator() {
   const persistGenerationRef = useRef(0)
 
   useLayoutEffect(() => {
+    if (cstId) {
+      persistReadyRef.current = true
+      return
+    }
     const saved = loadPersistedCalculatorState()
     const fee = feeConfig ?? defaultFeeConfig
     if (saved) {
@@ -154,12 +192,41 @@ export default function RoofingCalculator() {
       setProfitMarginPct(clampProfitMarginToFees(saved.profitMarginPct, fee))
     }
     persistReadyRef.current = true
-    // Intentionally once on mount — avoid re-applying storage when feeConfig updates
+    // Intentionally once on mount — a SalesPro customer loads from the database instead
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
-    if (!persistReadyRef.current) return
+    if (!cstId) {
+      setQuotesStatus("ready")
+      setChooserOpen(false)
+      setSavedQuotes([])
+      setQuotesError(null)
+      return
+    }
+    let cancelled = false
+    setQuotesStatus("loading")
+    void loadQuotes(cstId)
+      .then((quotes) => {
+        if (cancelled) return
+        setSavedQuotes(quotes)
+        setQuotesError(null)
+        setQuotesStatus("ready")
+        setChooserOpen(quotes.length > 0)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setQuotesError(error instanceof Error ? error.message : "Could not load saved quotes.")
+        setQuotesStatus("error")
+        setChooserOpen(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [cstId, quoteLoadId])
+
+  useEffect(() => {
+    if (!persistReadyRef.current || cstId) return
     const slice = {
       selectedRoofType,
       formData,
@@ -172,7 +239,7 @@ export default function RoofingCalculator() {
       savePersistedCalculatorState(slice)
     }, 300)
     return () => window.clearTimeout(id)
-  }, [formData, selectedRoofType, hasCedarShake, profitMarginPct])
+  }, [formData, selectedRoofType, hasCedarShake, profitMarginPct, cstId])
 
   const pageHeaderRef = useRef<HTMLElement | null>(null)
   const [summaryFillsViewport, setSummaryFillsViewport] = useState(false)
@@ -191,6 +258,7 @@ export default function RoofingCalculator() {
   }, [])
 
   const handleInputChange = (field: keyof FormData, value: string) => {
+    setFrozenQuote(null)
     const numValue = value === "" ? 0 : parseFloat(value)
     const safeValue = isNaN(numValue) ? 0 : numValue
 
@@ -231,13 +299,31 @@ export default function RoofingCalculator() {
     })
   }
 
-  const handleReset = () => {
+  const startNewEstimate = () => {
     persistGenerationRef.current += 1
     clearPersistedCalculatorState()
     setFormData(initialFormData)
     setHasCedarShake(false)
     setSelectedRoofType("vertical-seam")
     setProfitMarginPct(Math.min(fees.goalProfitMarginPct, maxGoalProfitMargin))
+    setFrozenQuote(null)
+    setSaveMessage(null)
+    setChooserOpen(false)
+    setQuotesStatus("ready")
+  }
+
+  const openSavedQuote = (quote: SavedQuote) => {
+    setSelectedRoofType(isRoofType(quote.roof_type_id) ? quote.roof_type_id : "vertical-seam")
+    setFormData(formDataFromSavedQuote(quote))
+    setHasCedarShake(quote.has_cedar_shake)
+    setProfitMarginPct(quote.profit_margin_pct)
+    setFrozenQuote(quote)
+    setSaveMessage(null)
+    setChooserOpen(false)
+  }
+
+  const handleReset = () => {
+    startNewEstimate()
   }
 
   const entry = pricingByType?.[selectedRoofType]
@@ -409,23 +495,90 @@ export default function RoofingCalculator() {
       profit,
       salePrice,
     }
-  }, [formData, pricing, fees, profitMarginPct])
+  }, [formData, pricing, breakdown, fees, profitMarginPct, hasCedarShake])
+
+  const summaryFees = frozenQuote ? feeConfigFromSavedQuote(frozenQuote) : fees
+  const summaryBreakdown = frozenQuote ? breakdownFromSavedQuote(frozenQuote) : breakdown
+  const summaryCalculations = frozenQuote ? calculationsFromSavedQuote(frozenQuote) : calculations
+  const summaryPipeItems = summaryBreakdown.pipeFlashingRate ?? []
+  const summaryPipeLabelUpTo6 = summaryPipeItems.find((item) => item.name.toLowerCase().includes("up to 6"))?.name ?? pipeLabelUpTo6
+  const summaryPipeLabelUpTo13 = summaryPipeItems.find((item) => item.name.toLowerCase().includes("up to 13"))?.name ?? pipeLabelUpTo13
+  const summaryPipeLabelUpTo19 = summaryPipeItems.find((item) => item.name.toLowerCase().includes("up to 19"))?.name ?? pipeLabelUpTo19
+  const marginMax = frozenQuote
+    ? Math.max(0, Math.floor(99 - summaryFees.commissionPct), Math.ceil(profitMarginPct))
+    : maxGoalProfitMargin
+
+  const refreshSavedQuotes = useCallback(() => {
+    if (!cstId) return
+    void loadQuotes(cstId)
+      .then((quotes) => {
+        setSavedQuotes(quotes)
+      })
+      .catch(() => {
+        // The estimate is already saved. The list refreshes the next time the page opens.
+      })
+  }, [cstId])
+
+  const handleSaveQuote = useCallback(() => {
+    if (!cstId || savingQuote || sheetStatus !== "ready" || frozenQuote) return
+    const roofTypeName = roofTypes.find((t) => t.id === selectedRoofType)?.name ?? selectedRoofType
+    const body = buildSaveQuoteBody({
+      cstId,
+      roofTypeId: selectedRoofType,
+      roofTypeName,
+      formData,
+      hasCedarShake,
+      profitMarginPct,
+      fees,
+      calculations,
+      breakdown,
+    })
+    setSavingQuote(true)
+    setSaveMessage(null)
+    void saveQuote(body)
+      .then((result) => {
+        setSaveMessage({ tone: "ok", text: `Saved estimate ${result.id}.` })
+        refreshSavedQuotes()
+      })
+      .catch((error: unknown) => {
+        const text = error instanceof Error ? error.message : "Save failed."
+        setSaveMessage({ tone: "error", text })
+      })
+      .finally(() => {
+        setSavingQuote(false)
+      })
+  }, [
+    cstId,
+    savingQuote,
+    sheetStatus,
+    selectedRoofType,
+    formData,
+    hasCedarShake,
+    profitMarginPct,
+    fees,
+    calculations,
+    breakdown,
+    refreshSavedQuotes,
+    frozenQuote,
+  ])
 
   const handleExportPdf = useCallback(() => {
-    const roofTypeName = roofTypes.find((t) => t.id === selectedRoofType)?.name ?? selectedRoofType
+    const roofTypeName = frozenQuote?.roof_type_name
+      ?? roofTypes.find((t) => t.id === selectedRoofType)?.name
+      ?? selectedRoofType
     const payload = buildQuoteExportPayload({
       roofTypeId: selectedRoofType,
       roofTypeName,
       formData,
       hasCedarShake,
-      calculations,
-      breakdown,
-      fees,
+      calculations: summaryCalculations,
+      breakdown: summaryBreakdown,
+      fees: summaryFees,
       profitMarginPct,
       pipeLabels: {
-        upTo6: pipeLabelUpTo6,
-        upTo13: pipeLabelUpTo13,
-        upTo19: pipeLabelUpTo19,
+        upTo6: summaryPipeLabelUpTo6,
+        upTo13: summaryPipeLabelUpTo13,
+        upTo19: summaryPipeLabelUpTo19,
       },
     })
     void import("@/lib/quote-export-pdf").then(({ exportQuoteToPdf }) => {
@@ -437,13 +590,14 @@ export default function RoofingCalculator() {
     selectedRoofType,
     formData,
     hasCedarShake,
-    calculations,
-    breakdown,
-    fees,
+    summaryCalculations,
+    summaryBreakdown,
+    summaryFees,
     profitMarginPct,
-    pipeLabelUpTo6,
-    pipeLabelUpTo13,
-    pipeLabelUpTo19,
+    summaryPipeLabelUpTo6,
+    summaryPipeLabelUpTo13,
+    summaryPipeLabelUpTo19,
+    frozenQuote,
   ])
 
   const formatCurrency = (value: number) => {
@@ -457,7 +611,7 @@ export default function RoofingCalculator() {
 
   return (
     <div className="relative min-h-screen bg-background">
-      {sheetStatus === "loading" && (
+      {sheetStatus === "loading" && (!cstId || (quotesStatus === "ready" && !chooserOpen)) && (
         <div
           className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background/80 backdrop-blur-sm"
           aria-busy="true"
@@ -485,7 +639,58 @@ export default function RoofingCalculator() {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        {sheetUsedFallback && sheetStatus === "ready" && (
+        {cstId && quotesStatus === "loading" && (
+          <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3" aria-busy="true">
+            <Loader2 className="size-10 animate-spin text-muted-foreground" aria-hidden />
+            <p className="text-sm text-muted-foreground">Loading saved quotes…</p>
+          </div>
+        )}
+        {cstId && quotesStatus === "error" && (
+          <div className="mx-auto flex min-h-[40vh] max-w-lg flex-col items-center justify-center gap-4 text-center">
+            <p className="text-sm text-red-600">{quotesError ?? "Could not load saved quotes."}</p>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <Button type="button" onClick={() => setQuoteLoadId((id) => id + 1)}>
+                Try again
+              </Button>
+              <Button type="button" variant="outline" onClick={startNewEstimate}>
+                Start a new estimate
+              </Button>
+            </div>
+          </div>
+        )}
+        {chooserOpen && quotesStatus === "ready" && (
+          <div className="mx-auto flex max-w-2xl flex-col gap-6">
+            <div className="flex flex-col gap-1">
+              <h2 className="text-lg font-semibold text-foreground">Customer {cstId}</h2>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Start a new estimate, or open a saved quote. A saved quote stays as it was until you change it and save again.
+              </p>
+            </div>
+            <Button type="button" className="w-full gap-2" onClick={startNewEstimate}>
+              <Plus className="size-4" />
+              Start a new estimate
+            </Button>
+            <div className="flex flex-col gap-3">
+              {savedQuotes.map((quote) => (
+                <button
+                  key={quote.id}
+                  type="button"
+                  onClick={() => openSavedQuote(quote)}
+                  className="rounded-xl border-2 border-border bg-card p-4 text-left transition-all hover:border-accent hover:shadow-md"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="font-semibold text-foreground">{quote.roof_type_name}</span>
+                    <span className="font-semibold tabular-nums text-foreground">{formatQuoteMoney(quote.sale_price)}</span>
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {formatQuoteSavedAt(quote.created_at)} · {formatCompactNumber(quote.squares)} squares
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {(!cstId || (quotesStatus === "ready" && !chooserOpen)) && sheetUsedFallback && sheetStatus === "ready" && (
           <Alert className="mb-6" variant="default">
             <AlertTitle>Using default pricing</AlertTitle>
             <AlertDescription>
@@ -493,6 +698,7 @@ export default function RoofingCalculator() {
             </AlertDescription>
           </Alert>
         )}
+        {(!cstId || (quotesStatus === "ready" && !chooserOpen)) && (
         <div className="grid gap-8 lg:grid-cols-[1fr_400px]">
           <div className="flex flex-col gap-8">
             <section>
@@ -504,7 +710,10 @@ export default function RoofingCalculator() {
                 {roofTypes.map((type) => (
                   <button
                     key={type.id}
-                    onClick={() => setSelectedRoofType(type.id)}
+                    onClick={() => {
+                      if (type.id !== selectedRoofType) setFrozenQuote(null)
+                      setSelectedRoofType(type.id)
+                    }}
                     className={`group relative rounded-xl border-2 p-4 text-left transition-all hover:border-accent hover:shadow-md ${
                       selectedRoofType === type.id
                         ? "border-accent bg-accent/5 shadow-md"
@@ -657,6 +866,7 @@ export default function RoofingCalculator() {
                         id="hasCedarShake"
                         checked={hasCedarShake}
                         onCheckedChange={(checked) => {
+                          setFrozenQuote(null)
                           const enabled = checked === true && formData.layers > 0
                           setHasCedarShake(enabled)
                           if (!enabled) {
@@ -701,10 +911,20 @@ export default function RoofingCalculator() {
               )}
             >
               <CardHeader className="pb-4">
+                {cstId && savedQuotes.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setChooserOpen(true)}
+                    className="mb-3 inline-flex items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <ChevronLeft className="size-4" />
+                    Saved quotes
+                  </button>
+                )}
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-lg">Estimate Summary</CardTitle>
                   <Badge variant="outline" className="text-xs">
-                    {roofTypes.find((t) => t.id === selectedRoofType)?.name}
+                    {frozenQuote?.roof_type_name ?? roofTypes.find((t) => t.id === selectedRoofType)?.name ?? selectedRoofType}
                   </Badge>
                 </div>
               </CardHeader>
@@ -712,14 +932,14 @@ export default function RoofingCalculator() {
                 <div className="flex flex-col gap-6 px-6 pb-4 md:min-h-0 md:flex-1 md:overflow-y-auto">
                   {admin && (
                     <>
-                      <BreakdownSection calculations={calculations} breakdown={breakdown} />
+                      <BreakdownSection calculations={summaryCalculations} breakdown={summaryBreakdown} />
 
                 <Separator />
 
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-foreground">Material Subtotal</span>
                   <span className="text-sm font-semibold text-foreground tabular-nums">
-                    {formatCurrency(calculations.materialSubtotal)}
+                    {formatCurrency(summaryCalculations.materialSubtotal)}
                   </span>
                 </div>
 
@@ -727,13 +947,13 @@ export default function RoofingCalculator() {
                   <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-1">
                     Fees & Adjustments
                   </h3>
-                  <FeeRow label="Sub Labor" value={calculations.subLabor}>
-                    <FeeDetail label={`Panels (${formatCompactNumber(formData.squares)} sq × ${formatCurrency(fees.subLaborPerSquare)})`} value={calculations.subLaborPanels} />
-                    <FeeDetail label={`Ridge (${formatCompactNumber(formData.ridgeLength)} ft × ${formatCurrency(fees.subLaborPerRidgeFt)})`} value={calculations.subLaborRidge} />
+                  <FeeRow label="Sub Labor" value={summaryCalculations.subLabor}>
+                    <FeeDetail label={`Panels (${formatCompactNumber(formData.squares)} sq × ${formatCurrency(summaryFees.subLaborPerSquare)})`} value={summaryCalculations.subLaborPanels} />
+                    <FeeDetail label={`Ridge (${formatCompactNumber(formData.ridgeLength)} ft × ${formatCurrency(summaryFees.subLaborPerRidgeFt)})`} value={summaryCalculations.subLaborRidge} />
                   </FeeRow>
                   <FeeRow
-                    label={`Dumpster Fee${calculations.dumpsterSquaresForTier > 0 ? ` (${formatCompactNumber(calculations.dumpsterSquaresForTier)} sq)` : ""}`}
-                    value={calculations.dumpsterFee}
+                    label={`Dumpster Fee${summaryCalculations.dumpsterSquaresForTier > 0 ? ` (${formatCompactNumber(summaryCalculations.dumpsterSquaresForTier)} sq)` : ""}`}
+                    value={summaryCalculations.dumpsterFee}
                   >
                     <div className="flex items-baseline justify-between gap-3 py-0.5 text-xs">
                       <span className="text-muted-foreground/80 truncate min-w-0">Base Squares</span>
@@ -758,15 +978,15 @@ export default function RoofingCalculator() {
                     <div className="flex items-baseline justify-between gap-3 py-0.5 text-xs">
                       <span className="text-muted-foreground/80 truncate min-w-0">Weighted Squares</span>
                       <span className="text-muted-foreground/80 font-medium shrink-0 tabular-nums">
-                        {formatCompactNumber(formData.squares)} × {formatCompactNumber(calculations.weightedLayers)} = {formatCompactNumber(calculations.dumpsterSquaresForTier)} sq
+                        {formatCompactNumber(formData.squares)} × {formatCompactNumber(summaryCalculations.weightedLayers)} = {formatCompactNumber(summaryCalculations.dumpsterSquaresForTier)} sq
                       </span>
                     </div>
-                    <FeeDetail label="Applied Dumpster Tier" value={calculations.dumpsterFee} />
+                    <FeeDetail label="Applied Dumpster Tier" value={summaryCalculations.dumpsterFee} />
                   </FeeRow>
-                  <FeeRow label="Satellite" value={fees.satellite} />
-                  <FeeRow label="Permits" value={fees.permits} />
-                  <FeeRow label={`Financing (${formatCompactNumber(fees.financingPct)}%)`} value={calculations.financing} />
-                  <FeeRow label={`Sales Tax (${formatCompactNumber(fees.salesTaxPct)}%)`} value={calculations.salesTax} />
+                  <FeeRow label="Satellite" value={summaryFees.satellite} />
+                  <FeeRow label="Permits" value={summaryFees.permits} />
+                  <FeeRow label={`Financing (${formatCompactNumber(summaryFees.financingPct)}%)`} value={summaryCalculations.financing} />
+                  <FeeRow label={`Sales Tax (${formatCompactNumber(summaryFees.salesTaxPct)}%)`} value={summaryCalculations.salesTax} />
                 </div>
 
                 <Separator />
@@ -774,7 +994,7 @@ export default function RoofingCalculator() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-muted-foreground">Total Fees & Adjustments</span>
                   <span className="text-sm text-muted-foreground tabular-nums">
-                    {formatCurrency(calculations.totalHardCosts)}
+                    {formatCurrency(summaryCalculations.totalHardCosts)}
                   </span>
                 </div>
 
@@ -790,12 +1010,15 @@ export default function RoofingCalculator() {
                         id="profitMarginInput"
                         type="number"
                         min={0}
-                          max={maxGoalProfitMargin}
+                          max={marginMax}
                         step={1}
                         value={profitMarginPct}
                         onChange={(e) => {
                           const v = parseFloat(e.target.value)
-                            if (!isNaN(v) && v >= 0 && v <= maxGoalProfitMargin) setProfitMarginPct(v)
+                            if (!isNaN(v) && v >= 0 && v <= marginMax) {
+                              if (v !== profitMarginPct) setFrozenQuote(null)
+                              setProfitMarginPct(v)
+                            }
                         }}
                         className="w-20 h-8 text-right text-sm tabular-nums"
                       />
@@ -805,10 +1028,13 @@ export default function RoofingCalculator() {
                   <Slider
                     id="profitMargin"
                     min={0}
-                      max={maxGoalProfitMargin}
+                      max={marginMax}
                     step={1}
                     value={[profitMarginPct]}
-                    onValueChange={([v]) => setProfitMarginPct(v)}
+                    onValueChange={([v]) => {
+                      if (v !== profitMarginPct) setFrozenQuote(null)
+                      setProfitMarginPct(v)
+                    }}
                     className="w-full"
                   />
                 </div>
@@ -816,21 +1042,21 @@ export default function RoofingCalculator() {
                 <div className="flex flex-col gap-1.5 mt-1">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">
-                      Commission ({formatCompactNumber(fees.commissionPct)}%)
+                      Commission ({formatCompactNumber(summaryFees.commissionPct)}%)
                     </span>
                     <span className="text-sm text-muted-foreground tabular-nums">
-                      {formatCurrency(calculations.commission)}
+                      {formatCurrency(summaryCalculations.commission)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Expected Profit</span>
-                    <span className={`text-sm font-semibold tabular-nums ${calculations.profit >= 0 ? "text-green-600" : "text-red-500"}`}>
-                      {formatCurrency(calculations.profit)}
+                    <span className={`text-sm font-semibold tabular-nums ${summaryCalculations.profit >= 0 ? "text-green-600" : "text-red-500"}`}>
+                      {formatCurrency(summaryCalculations.profit)}
                     </span>
                   </div>
                 </div>
 
-                  {calculations.invalidMarginTarget && (
+                  {summaryCalculations.invalidMarginTarget && (
                     <p className="text-xs text-amber-600">
                       Goal Profit Margin + Commission + Financing must be below 100%. Lower the margin target to see a valid sale price.
                     </p>
@@ -847,11 +1073,42 @@ export default function RoofingCalculator() {
                   <div className="flex flex-col gap-2">
                     <Button
                       type="button"
+                      className="w-full gap-2"
+                      disabled={!cstId || savingQuote || sheetStatus !== "ready" || frozenQuote !== null}
+                      title={
+                        !cstId
+                          ? "Open this page with a cst_id from SalesPro to save."
+                          : frozenQuote
+                            ? "Change the estimate to save it as a new quote."
+                            : undefined
+                      }
+                      onClick={handleSaveQuote}
+                    >
+                      {savingQuote ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                      {savingQuote ? "Saving…" : "Save quote"}
+                    </Button>
+                    {!cstId && (
+                      <p className="text-xs text-muted-foreground text-center leading-relaxed">
+                        Open this page with a cst_id from SalesPro to save.
+                      </p>
+                    )}
+                    {saveMessage && (
+                      <p
+                        className={cn(
+                          "text-xs text-center leading-relaxed",
+                          saveMessage.tone === "error" ? "text-red-600" : "text-muted-foreground",
+                        )}
+                      >
+                        {saveMessage.text}
+                      </p>
+                    )}
+                    <Button
+                      type="button"
                       variant="outline"
                       className="w-full gap-2"
-                      disabled={calculations.invalidMarginTarget}
+                      disabled={summaryCalculations.invalidMarginTarget}
                       title={
-                        calculations.invalidMarginTarget
+                        summaryCalculations.invalidMarginTarget
                           ? "Lower goal profit margin so sale price is valid before exporting."
                           : undefined
                       }
@@ -872,7 +1129,7 @@ export default function RoofingCalculator() {
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-primary-foreground">Sale Price</span>
                       <span className="text-2xl font-bold text-primary-foreground">
-                        {formatCurrency(calculations.salePrice)}
+                        {formatCurrency(summaryCalculations.salePrice)}
                       </span>
                     </div>
                   </div>
@@ -881,6 +1138,7 @@ export default function RoofingCalculator() {
             </Card>
           </div>
         </div>
+        )}
       </main>
     </div>
   )
