@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, type FormEvent } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -196,6 +196,7 @@ function searchResultGroups(results: QuoteSearchResults): { customer: QuoteCusto
 
 export default function RoofingCalculator() {
   const router = useRouter()
+  const pathname = usePathname()
   const searchParams = useSearchParams()
   const admin = searchParams.get("admin") === "true"
   const cstId = (searchParams.get("cst_id") ?? "").trim()
@@ -210,6 +211,7 @@ export default function RoofingCalculator() {
   const [hasCedarShake, setHasCedarShake] = useState(false)
   const [savingQuote, setSavingQuote] = useState(false)
   const [savedQuotes, setSavedQuotes] = useState<SavedQuote[]>([])
+  const [pageCustomer, setPageCustomer] = useState<QuoteCustomer | null>(null)
   const [quotesStatus, setQuotesStatus] = useState<"loading" | "ready" | "error">(cstId ? "loading" : "ready")
   const [quotesError, setQuotesError] = useState<string | null>(null)
   const [chooserOpen, setChooserOpen] = useState(false)
@@ -220,7 +222,9 @@ export default function RoofingCalculator() {
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchResults, setSearchResults] = useState<QuoteSearchResults | null>(null)
+  const [searchOrigin, setSearchOrigin] = useState<QuoteSearchResults | null>(null)
   const [pendingCustomerId, setPendingCustomerId] = useState<string | null>(null)
+  const [returningHome, setReturningHome] = useState(false)
   const skipChooserRef = useRef(false)
 
   const fees = feeConfig ?? defaultFeeConfig
@@ -287,6 +291,7 @@ export default function RoofingCalculator() {
       setQuotesStatus("ready")
       setChooserOpen(false)
       setSavedQuotes([])
+      setPageCustomer(null)
       setQuotesError(null)
       return
     }
@@ -297,6 +302,7 @@ export default function RoofingCalculator() {
       .then((result) => {
         if (cancelled) return
         setSavedQuotes(result.quotes)
+        setPageCustomer(result.customers?.find((customer) => customer.cst_id === cstId) ?? null)
         setQuotesError(null)
         setQuotesStatus("ready")
         if (skipChooserRef.current) {
@@ -431,6 +437,21 @@ export default function RoofingCalculator() {
     }
   }, [cstId, pendingCustomerId])
 
+  useEffect(() => {
+    if (returningHome && !cstId) setReturningHome(false)
+  }, [cstId, returningHome])
+
+  const leaveSearchResults = () => {
+    setSearchResults(null)
+    setSearchOrigin(null)
+    setChooserOpen(false)
+    setReturningHome(true)
+    const params = new URLSearchParams(searchParams.toString())
+    params.delete("cst_id")
+    const query = params.toString()
+    router.replace(query ? `${pathname}?${query}` : pathname)
+  }
+
   const openCustomerQuote = (quote: SavedQuote) => {
     setSearchResults(null)
     openCustomer(quote.cst_id)
@@ -438,6 +459,7 @@ export default function RoofingCalculator() {
   }
 
   const startEstimateForCustomer = (customerId: string) => {
+    if (searchResults) setSearchOrigin(searchResults)
     setSearchResults(null)
     openCustomer(customerId)
     startNewEstimate()
@@ -767,7 +789,7 @@ export default function RoofingCalculator() {
 
   return (
     <div className="relative min-h-screen bg-background">
-      {sheetStatus === "loading" && !searchResults && !!cstId && quotesStatus === "ready" && !chooserOpen && (
+      {sheetStatus === "loading" && !searchResults && !returningHome && !!cstId && quotesStatus === "ready" && !chooserOpen && (
         <div
           className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background/80 backdrop-blur-sm"
           aria-busy="true"
@@ -790,7 +812,7 @@ export default function RoofingCalculator() {
                 Generate a fast, professional estimate for standing seam metal roofing systems.
               </p>
             </div>
-            {(cstId || searchResults) && (
+            {((cstId && !returningHome) || searchResults) && (
               <QuoteSearchForm
                 id="quote-search"
                 query={searchQuery}
@@ -809,18 +831,18 @@ export default function RoofingCalculator() {
         {searchResults && (
           <QuoteSearchResultsView
             results={searchResults}
-            onBack={() => setSearchResults(null)}
+            onBack={leaveSearchResults}
             onOpenQuote={openCustomerQuote}
             onStartEstimate={startEstimateForCustomer}
           />
         )}
-        {!searchResults && cstId && quotesStatus === "loading" && (
+        {!searchResults && !returningHome && cstId && quotesStatus === "loading" && (
           <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3" aria-busy="true">
             <Loader2 className="size-10 animate-spin text-muted-foreground" aria-hidden />
             <p className="text-sm text-muted-foreground">Loading saved quotes…</p>
           </div>
         )}
-        {!searchResults && cstId && quotesStatus === "error" && (
+        {!searchResults && !returningHome && cstId && quotesStatus === "error" && (
           <div className="mx-auto flex min-h-[40vh] max-w-lg flex-col items-center justify-center gap-4 text-center">
             <p className="text-sm text-red-600">{quotesError ?? "Could not load saved quotes."}</p>
             <div className="flex flex-wrap items-center justify-center gap-3">
@@ -833,10 +855,17 @@ export default function RoofingCalculator() {
             </div>
           </div>
         )}
-        {!searchResults && chooserOpen && quotesStatus === "ready" && (
+        {!searchResults && !returningHome && chooserOpen && quotesStatus === "ready" && (
           <div className="mx-auto flex max-w-2xl flex-col gap-6">
             <div className="flex flex-col gap-1">
-              <h2 className="text-lg font-semibold text-foreground">Customer {cstId}</h2>
+              <h2 className="text-lg font-semibold text-foreground">
+                {pageCustomer && `${pageCustomer.first_name} ${pageCustomer.last_name}`.trim()
+                  ? customerLabel(pageCustomer)
+                  : `Customer ${cstId}`}
+              </h2>
+              {pageCustomer && `${pageCustomer.first_name} ${pageCustomer.last_name}`.trim() && (
+                <p className="text-sm text-muted-foreground">Customer {cstId}</p>
+              )}
               <p className="text-sm text-muted-foreground leading-relaxed">
                 Start a new estimate, or open a saved quote. A saved quote stays as it was until you change it and save again.
               </p>
@@ -871,7 +900,7 @@ export default function RoofingCalculator() {
             <p className="text-sm text-muted-foreground">Opening customer…</p>
           </div>
         )}
-        {!searchResults && !cstId && !pendingCustomerId && (
+        {!searchResults && !pendingCustomerId && (!cstId || returningHome) && (
           <div className="mx-auto flex min-h-[calc(100vh-14rem)] max-w-xl flex-col justify-center">
             <div className="rounded-xl border-2 border-border bg-card p-6 shadow-lg sm:p-8">
               <h2 className="text-xl font-semibold tracking-tight text-foreground">Start an estimate</h2>
@@ -891,7 +920,7 @@ export default function RoofingCalculator() {
             </div>
           </div>
         )}
-        {!searchResults && cstId && quotesStatus === "ready" && !chooserOpen && sheetUsedFallback && sheetStatus === "ready" && (
+        {!searchResults && !returningHome && cstId && quotesStatus === "ready" && !chooserOpen && sheetUsedFallback && sheetStatus === "ready" && (
           <Alert className="mb-6" variant="default">
             <AlertTitle>Using default pricing</AlertTitle>
             <AlertDescription>
@@ -899,8 +928,31 @@ export default function RoofingCalculator() {
             </AlertDescription>
           </Alert>
         )}
-        {!searchResults && cstId && quotesStatus === "ready" && !chooserOpen && (
+        {!searchResults && !returningHome && cstId && quotesStatus === "ready" && !chooserOpen && (
         <div className="grid gap-8 lg:grid-cols-[1fr_400px]">
+          {(searchOrigin || savedQuotes.length > 0) && (
+            <div className="lg:col-span-2">
+              {searchOrigin ? (
+                <button
+                  type="button"
+                  onClick={() => setSearchResults(searchOrigin)}
+                  className="inline-flex w-fit items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ChevronLeft className="size-4" />
+                  Search results
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setChooserOpen(true)}
+                  className="inline-flex w-fit items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ChevronLeft className="size-4" />
+                  Saved quotes
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex flex-col gap-8">
             <section>
               <div className="mb-4 flex items-center gap-2">
@@ -1112,16 +1164,6 @@ export default function RoofingCalculator() {
               )}
             >
               <CardHeader className="pb-4">
-                {cstId && savedQuotes.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setChooserOpen(true)}
-                    className="mb-3 inline-flex items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    <ChevronLeft className="size-4" />
-                    Saved quotes
-                  </button>
-                )}
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-lg">Estimate Summary</CardTitle>
                   <Badge variant="outline" className="text-xs">
