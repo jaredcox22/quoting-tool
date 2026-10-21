@@ -200,6 +200,7 @@ export default function RoofingCalculator() {
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchResults, setSearchResults] = useState<QuoteSearchResults | null>(null)
+  const [pendingCustomerId, setPendingCustomerId] = useState<string | null>(null)
   const skipChooserRef = useRef(false)
 
   const fees = feeConfig ?? defaultFeeConfig
@@ -395,25 +396,30 @@ export default function RoofingCalculator() {
     setSearchResults(null)
   }
 
+  const openCustomer = (customerId: string) => {
+    if (customerId === cstId) return
+    skipChooserRef.current = true
+    setPendingCustomerId(customerId)
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("cst_id", customerId)
+    router.replace(`?${params.toString()}`)
+  }
+
+  useEffect(() => {
+    if (pendingCustomerId && cstId === pendingCustomerId) {
+      setPendingCustomerId(null)
+    }
+  }, [cstId, pendingCustomerId])
+
   const openCustomerQuote = (quote: SavedQuote) => {
     setSearchResults(null)
-    if (quote.cst_id !== cstId) {
-      skipChooserRef.current = true
-      const params = new URLSearchParams(searchParams.toString())
-      params.set("cst_id", quote.cst_id)
-      router.replace(`?${params.toString()}`)
-    }
+    openCustomer(quote.cst_id)
     openSavedQuote(quote)
   }
 
   const startEstimateForCustomer = (customerId: string) => {
     setSearchResults(null)
-    if (customerId !== cstId) {
-      skipChooserRef.current = true
-      const params = new URLSearchParams(searchParams.toString())
-      params.set("cst_id", customerId)
-      router.replace(`?${params.toString()}`)
-    }
+    openCustomer(customerId)
     startNewEstimate()
   }
 
@@ -741,7 +747,7 @@ export default function RoofingCalculator() {
 
   return (
     <div className="relative min-h-screen bg-background">
-      {sheetStatus === "loading" && !searchResults && (!cstId || (quotesStatus === "ready" && !chooserOpen)) && (
+      {sheetStatus === "loading" && !searchResults && !!cstId && quotesStatus === "ready" && !chooserOpen && (
         <div
           className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background/80 backdrop-blur-sm"
           aria-busy="true"
@@ -764,28 +770,17 @@ export default function RoofingCalculator() {
                 Generate a fast, professional estimate for standing seam metal roofing systems.
               </p>
             </div>
-            <form onSubmit={handleQuoteSearch} className="flex w-full max-w-md flex-col gap-1.5">
-              <Label htmlFor="quote-search" className="sr-only">
-                Search quotes
-              </Label>
-              <div className="flex gap-2">
-                <Input
-                  id="quote-search"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Customer id or name"
-                  autoComplete="off"
-                  disabled={searching}
-                />
-                <Button type="submit" className="shrink-0 gap-2" disabled={searching}>
-                  {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-                  Search
-                </Button>
-              </div>
-              <p className={cn("text-xs leading-relaxed", searchError ? "text-red-600" : "text-muted-foreground")}>
-                {searchError ?? "Search by customer id, or any part of a name."}
-              </p>
-            </form>
+            {(cstId || searchResults) && (
+              <QuoteSearchForm
+                id="quote-search"
+                query={searchQuery}
+                searching={searching}
+                error={searchError}
+                onQueryChange={setSearchQuery}
+                onSubmit={handleQuoteSearch}
+                className="w-full max-w-md"
+              />
+            )}
           </div>
         </div>
       </header>
@@ -850,7 +845,33 @@ export default function RoofingCalculator() {
             </div>
           </div>
         )}
-        {!searchResults && (!cstId || (quotesStatus === "ready" && !chooserOpen)) && sheetUsedFallback && sheetStatus === "ready" && (
+        {!searchResults && !cstId && pendingCustomerId && (
+          <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3" aria-busy="true">
+            <Loader2 className="size-10 animate-spin text-muted-foreground" aria-hidden />
+            <p className="text-sm text-muted-foreground">Opening customer…</p>
+          </div>
+        )}
+        {!searchResults && !cstId && !pendingCustomerId && (
+          <div className="mx-auto flex min-h-[calc(100vh-14rem)] max-w-xl flex-col justify-center">
+            <div className="rounded-xl border-2 border-border bg-card p-6 shadow-lg sm:p-8">
+              <h2 className="text-xl font-semibold tracking-tight text-foreground">Start an estimate</h2>
+              <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
+                Search for a customer by name or id. Open a saved quote, or start a new estimate for that customer.
+              </p>
+              <QuoteSearchForm
+                id="quote-search-start"
+                query={searchQuery}
+                searching={searching}
+                error={searchError}
+                onQueryChange={setSearchQuery}
+                onSubmit={handleQuoteSearch}
+                autoFocus
+                className="mt-6"
+              />
+            </div>
+          </div>
+        )}
+        {!searchResults && cstId && quotesStatus === "ready" && !chooserOpen && sheetUsedFallback && sheetStatus === "ready" && (
           <Alert className="mb-6" variant="default">
             <AlertTitle>Using default pricing</AlertTitle>
             <AlertDescription>
@@ -858,7 +879,7 @@ export default function RoofingCalculator() {
             </AlertDescription>
           </Alert>
         )}
-        {!searchResults && (!cstId || (quotesStatus === "ready" && !chooserOpen)) && (
+        {!searchResults && cstId && quotesStatus === "ready" && !chooserOpen && (
         <div className="grid gap-8 lg:grid-cols-[1fr_400px]">
           <div className="flex flex-col gap-8">
             <section>
@@ -1588,6 +1609,52 @@ function ExpandableSummaryRow({
   )
 }
 
+function QuoteSearchForm({
+  id,
+  query,
+  searching,
+  error,
+  onQueryChange,
+  onSubmit,
+  autoFocus = false,
+  className,
+}: {
+  id: string
+  query: string
+  searching: boolean
+  error: string | null
+  onQueryChange: (value: string) => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+  autoFocus?: boolean
+  className?: string
+}) {
+  return (
+    <form onSubmit={onSubmit} className={cn("flex flex-col gap-1.5", className)}>
+      <Label htmlFor={id} className="sr-only">
+        Search quotes
+      </Label>
+      <div className="flex gap-2">
+        <Input
+          id={id}
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder="Customer id or name"
+          autoComplete="off"
+          autoFocus={autoFocus}
+          disabled={searching}
+        />
+        <Button type="submit" className="shrink-0 gap-2" disabled={searching}>
+          {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+          Search
+        </Button>
+      </div>
+      <p className={cn("text-xs leading-relaxed", error ? "text-red-600" : "text-muted-foreground")}>
+        {error ?? "Search by customer id, or any part of a name."}
+      </p>
+    </form>
+  )
+}
+
 function QuoteSearchResultsView({
   results,
   onBack,
@@ -1642,14 +1709,12 @@ function QuoteSearchResultsView({
                 </p>
               )}
             </div>
+            <Button type="button" className="w-full gap-2" onClick={() => onStartEstimate(group.customer.cst_id)}>
+              <Plus className="size-4" />
+              Start a new estimate
+            </Button>
             {group.quotes.length === 0 ? (
-              <div className="flex flex-col items-start gap-3 rounded-xl border-2 border-border bg-card p-4">
-                <p className="text-sm text-muted-foreground">No saved quotes for this customer.</p>
-                <Button type="button" variant="outline" className="gap-2" onClick={() => onStartEstimate(group.customer.cst_id)}>
-                  <Plus className="size-4" />
-                  Start a new estimate
-                </Button>
-              </div>
+              <p className="text-sm text-muted-foreground">No saved quotes for this customer.</p>
             ) : (
               group.quotes.map((quote) => (
                 <button
