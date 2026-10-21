@@ -905,7 +905,7 @@ export default function RoofingCalculator() {
             <div className="rounded-xl border-2 border-border bg-card p-6 shadow-lg sm:p-8">
               <h2 className="text-xl font-semibold tracking-tight text-foreground">Start an estimate</h2>
               <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
-                Search for a customer by name or id. Open a saved quote, or start a new estimate for that customer.
+                Search for a customer by name, id, or address. Open a saved quote, or start a new estimate for that customer.
               </p>
               <QuoteSearchForm
                 id="quote-search-start"
@@ -1700,7 +1700,7 @@ function QuoteSearchForm({
           id={id}
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="Customer id or name"
+          placeholder="Customer id, name, or address"
           autoComplete="off"
           autoFocus={autoFocus}
           disabled={searching}
