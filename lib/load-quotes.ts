@@ -232,9 +232,55 @@ function parseQuote(value: unknown): SavedQuote | null {
   }
 }
 
-export async function loadQuotes(cstId: string): Promise<SavedQuote[]> {
+export interface QuoteCustomer {
+  cst_id: string
+  first_name: string
+  last_name: string
+  cust_number: string | null
+}
+
+export interface LoadQuotesResult {
+  quotes: SavedQuote[]
+  customers: QuoteCustomer[] | null
+  customersTruncated: boolean
+}
+
+export type QuoteSearchQuery = { cstId: string } | { name: string }
+
+export function parseQuoteSearch(raw: string): QuoteSearchQuery | { error: string } {
+  const text = raw.trim().replace(/\s+/g, " ")
+  if (!text) {
+    return { error: "Enter a customer id or a name." }
+  }
+  if (text.length > 100) return { error: "That search is too long." }
+  if (text.length < 2 && !/^\d+$/.test(text)) {
+    return { error: "Enter at least 2 characters." }
+  }
+  return { name: text }
+}
+
+function parseCustomer(value: unknown): QuoteCustomer | null {
+  if (!value || typeof value !== "object") return null
+  const row = value as Record<string, unknown>
+  const cstId = row.cst_id == null ? "" : String(row.cst_id).trim()
+  if (!cstId) return null
+  const custNumber = row.cust_number == null || row.cust_number === "" ? null : String(row.cust_number).trim()
+  return {
+    cst_id: cstId,
+    first_name: typeof row.first_name === "string" ? row.first_name : "",
+    last_name: typeof row.last_name === "string" ? row.last_name : "",
+    cust_number: custNumber || null,
+  }
+}
+
+export async function loadQuotes(query: QuoteSearchQuery): Promise<LoadQuotesResult> {
   const url = new URL(loadQuotesEndpoint())
-  url.searchParams.set("cst_id", cstId)
+  if ("cstId" in query) {
+    url.searchParams.set("cst_id", query.cstId)
+  } else {
+    url.searchParams.set("name", query.name)
+  }
+
   let response: Response
   try {
     response = await fetch(url.toString(), { method: "GET", cache: "no-store" })
@@ -242,9 +288,21 @@ export async function loadQuotes(cstId: string): Promise<SavedQuote[]> {
     throw new Error("Could not reach the quote service.")
   }
 
-  let payload: { success?: boolean; error?: string; quotes?: unknown } | null = null
+  let payload: {
+    success?: boolean
+    error?: string
+    quotes?: unknown
+    customers?: unknown
+    customers_truncated?: unknown
+  } | null = null
   try {
-    payload = (await response.json()) as { success?: boolean; error?: string; quotes?: unknown }
+    payload = (await response.json()) as {
+      success?: boolean
+      error?: string
+      quotes?: unknown
+      customers?: unknown
+      customers_truncated?: unknown
+    }
   } catch {
     payload = null
   }
@@ -253,7 +311,15 @@ export async function loadQuotes(cstId: string): Promise<SavedQuote[]> {
     throw new Error(payload?.error || `Could not load quotes (${response.status})`)
   }
 
-  return payload.quotes.map(parseQuote).filter((quote): quote is SavedQuote => quote !== null)
+  const customers = Array.isArray(payload.customers)
+    ? payload.customers.map(parseCustomer).filter((customer): customer is QuoteCustomer => customer !== null)
+    : null
+
+  return {
+    quotes: payload.quotes.map(parseQuote).filter((quote): quote is SavedQuote => quote !== null),
+    customers,
+    customersTruncated: payload.customers_truncated === true,
+  }
 }
 
 export function formDataFromSavedQuote(quote: SavedQuote): QuoteFormSnapshot {

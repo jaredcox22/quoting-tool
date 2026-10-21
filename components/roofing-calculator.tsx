@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from "react"
-import { useSearchParams } from "next/navigation"
+import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, type FormEvent } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -21,6 +21,7 @@ import {
   Loader2,
   Plus,
   Save,
+  Search,
 } from "lucide-react"
 import type { RoofTypePricing, PricingData, PricingBreakdown, LineItemDetail, FeeConfig } from "@/lib/google-sheets"
 import { defaultPricing, defaultFeeConfig, defaultSheetData, loadSheetDataFromEnv } from "@/lib/google-sheets"
@@ -35,7 +36,10 @@ import {
   formatQuoteMoney,
   formatQuoteSavedAt,
   loadQuotes,
+  parseQuoteSearch,
   savedQuoteFromSaveBody,
+  type QuoteCustomer,
+  type QuoteSearchQuery,
   type SavedQuote,
 } from "@/lib/load-quotes"
 import { toast } from "sonner"
@@ -118,7 +122,60 @@ const roofTypes = [
   },
 ]
 
+interface QuoteSearchResults {
+  label: string
+  query: QuoteSearchQuery
+  quotes: SavedQuote[]
+  customers: QuoteCustomer[] | null
+  customersTruncated: boolean
+}
+
+function customerLabel(customer: QuoteCustomer): string {
+  const name = `${customer.first_name} ${customer.last_name}`.trim()
+  return name || `Customer ${customer.cst_id}`
+}
+
+function searchResultGroups(results: QuoteSearchResults): { customer: QuoteCustomer; quotes: SavedQuote[] }[] {
+  const quotesByCustomer = new Map<string, SavedQuote[]>()
+  for (const quote of results.quotes) {
+    const existing = quotesByCustomer.get(quote.cst_id) ?? []
+    existing.push(quote)
+    quotesByCustomer.set(quote.cst_id, existing)
+  }
+
+  if (results.customers) {
+    const known = new Set(results.customers.map((customer) => customer.cst_id))
+    const groups = results.customers.map((customer) => ({
+      customer,
+      quotes: quotesByCustomer.get(customer.cst_id) ?? [],
+    }))
+    for (const [cstId, quotes] of quotesByCustomer) {
+      if (!known.has(cstId)) {
+        groups.push({
+          customer: { cst_id: cstId, first_name: "", last_name: "", cust_number: null },
+          quotes,
+        })
+      }
+    }
+    groups.sort((a, b) => {
+      const aHasQuotes = a.quotes.length > 0 ? 0 : 1
+      const bHasQuotes = b.quotes.length > 0 ? 0 : 1
+      return aHasQuotes - bHasQuotes
+    })
+    return groups
+  }
+
+  const cstId = "cstId" in results.query ? results.query.cstId : (results.quotes[0]?.cst_id ?? "")
+  return [
+    {
+      customer: { cst_id: cstId, first_name: "", last_name: "", cust_number: null },
+      quotes: results.quotes,
+    },
+  ]
+}
+
 export default function RoofingCalculator() {
+  const router = useRouter()
   const searchParams = useSearchParams()
   const admin = searchParams.get("admin") === "true"
   const cstId = (searchParams.get("cst_id") ?? "").trim()
@@ -139,6 +196,11 @@ export default function RoofingCalculator() {
   const [frozenQuote, setFrozenQuote] = useState<SavedQuote | null>(null)
   const [sourceQuote, setSourceQuote] = useState<SavedQuote | null>(null)
   const [quoteLoadId, setQuoteLoadId] = useState(0)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [searchResults, setSearchResults] = useState<QuoteSearchResults | null>(null)
+  const skipChooserRef = useRef(false)
 
   const fees = feeConfig ?? defaultFeeConfig
   const maxGoalProfitMargin = Math.max(0, Math.floor(99 - fees.commissionPct))
@@ -208,17 +270,24 @@ export default function RoofingCalculator() {
       return
     }
     let cancelled = false
-    setQuotesStatus("loading")
-    void loadQuotes(cstId)
-      .then((quotes) => {
+    const keepOpenQuote = skipChooserRef.current
+    if (!keepOpenQuote) setQuotesStatus("loading")
+    void loadQuotes({ cstId })
+      .then((result) => {
         if (cancelled) return
-        setSavedQuotes(quotes)
+        setSavedQuotes(result.quotes)
         setQuotesError(null)
         setQuotesStatus("ready")
-        setChooserOpen(quotes.length > 0)
+        if (skipChooserRef.current) {
+          skipChooserRef.current = false
+          setChooserOpen(false)
+          return
+        }
+        setChooserOpen(result.quotes.length > 0)
       })
       .catch((error: unknown) => {
         if (cancelled) return
+        skipChooserRef.current = false
         setQuotesError(error instanceof Error ? error.message : "Could not load saved quotes.")
         setQuotesStatus("error")
         setChooserOpen(false)
@@ -323,6 +392,57 @@ export default function RoofingCalculator() {
     setFrozenQuote(quote)
     setSourceQuote(quote)
     setChooserOpen(false)
+    setSearchResults(null)
+  }
+
+  const openCustomerQuote = (quote: SavedQuote) => {
+    setSearchResults(null)
+    if (quote.cst_id !== cstId) {
+      skipChooserRef.current = true
+      const params = new URLSearchParams(searchParams.toString())
+      params.set("cst_id", quote.cst_id)
+      router.replace(`?${params.toString()}`)
+    }
+    openSavedQuote(quote)
+  }
+
+  const startEstimateForCustomer = (customerId: string) => {
+    setSearchResults(null)
+    if (customerId !== cstId) {
+      skipChooserRef.current = true
+      const params = new URLSearchParams(searchParams.toString())
+      params.set("cst_id", customerId)
+      router.replace(`?${params.toString()}`)
+    }
+    startNewEstimate()
+  }
+
+  const handleQuoteSearch = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const parsed = parseQuoteSearch(searchQuery)
+    if ("error" in parsed) {
+      setSearchError(parsed.error)
+      return
+    }
+    const label = "name" in parsed ? parsed.name : `Customer ${parsed.cstId}`
+    setSearching(true)
+    setSearchError(null)
+    void loadQuotes(parsed)
+      .then((result) => {
+        setSearchResults({
+          label,
+          query: parsed,
+          quotes: result.quotes,
+          customers: result.customers,
+          customersTruncated: result.customersTruncated,
+        })
+      })
+      .catch((error: unknown) => {
+        setSearchError(error instanceof Error ? error.message : "Could not search quotes.")
+      })
+      .finally(() => {
+        setSearching(false)
+      })
   }
 
   const handleReset = () => {
@@ -518,9 +638,9 @@ export default function RoofingCalculator() {
 
   const refreshSavedQuotes = useCallback(() => {
     if (!cstId) return
-    void loadQuotes(cstId)
-      .then((quotes) => {
-        setSavedQuotes(quotes)
+    void loadQuotes({ cstId })
+      .then((result) => {
+        setSavedQuotes(result.quotes)
       })
       .catch(() => {
         // The estimate is already saved. The list refreshes the next time the page opens.
@@ -621,7 +741,7 @@ export default function RoofingCalculator() {
 
   return (
     <div className="relative min-h-screen bg-background">
-      {sheetStatus === "loading" && (!cstId || (quotesStatus === "ready" && !chooserOpen)) && (
+      {sheetStatus === "loading" && !searchResults && (!cstId || (quotesStatus === "ready" && !chooserOpen)) && (
         <div
           className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background/80 backdrop-blur-sm"
           aria-busy="true"
@@ -633,7 +753,7 @@ export default function RoofingCalculator() {
       )}
       <header ref={pageHeaderRef} className="border-b bg-card">
         <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-3">
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl text-balance">
@@ -644,18 +764,48 @@ export default function RoofingCalculator() {
                 Generate a fast, professional estimate for standing seam metal roofing systems.
               </p>
             </div>
+            <form onSubmit={handleQuoteSearch} className="flex w-full max-w-md flex-col gap-1.5">
+              <Label htmlFor="quote-search" className="sr-only">
+                Search quotes
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  id="quote-search"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Customer id or name"
+                  autoComplete="off"
+                  disabled={searching}
+                />
+                <Button type="submit" className="shrink-0 gap-2" disabled={searching}>
+                  {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+                  Search
+                </Button>
+              </div>
+              <p className={cn("text-xs leading-relaxed", searchError ? "text-red-600" : "text-muted-foreground")}>
+                {searchError ?? "Search by customer id, or any part of a name."}
+              </p>
+            </form>
           </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        {cstId && quotesStatus === "loading" && (
+        {searchResults && (
+          <QuoteSearchResultsView
+            results={searchResults}
+            onBack={() => setSearchResults(null)}
+            onOpenQuote={openCustomerQuote}
+            onStartEstimate={startEstimateForCustomer}
+          />
+        )}
+        {!searchResults && cstId && quotesStatus === "loading" && (
           <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3" aria-busy="true">
             <Loader2 className="size-10 animate-spin text-muted-foreground" aria-hidden />
             <p className="text-sm text-muted-foreground">Loading saved quotes…</p>
           </div>
         )}
-        {cstId && quotesStatus === "error" && (
+        {!searchResults && cstId && quotesStatus === "error" && (
           <div className="mx-auto flex min-h-[40vh] max-w-lg flex-col items-center justify-center gap-4 text-center">
             <p className="text-sm text-red-600">{quotesError ?? "Could not load saved quotes."}</p>
             <div className="flex flex-wrap items-center justify-center gap-3">
@@ -668,7 +818,7 @@ export default function RoofingCalculator() {
             </div>
           </div>
         )}
-        {chooserOpen && quotesStatus === "ready" && (
+        {!searchResults && chooserOpen && quotesStatus === "ready" && (
           <div className="mx-auto flex max-w-2xl flex-col gap-6">
             <div className="flex flex-col gap-1">
               <h2 className="text-lg font-semibold text-foreground">Customer {cstId}</h2>
@@ -700,7 +850,7 @@ export default function RoofingCalculator() {
             </div>
           </div>
         )}
-        {(!cstId || (quotesStatus === "ready" && !chooserOpen)) && sheetUsedFallback && sheetStatus === "ready" && (
+        {!searchResults && (!cstId || (quotesStatus === "ready" && !chooserOpen)) && sheetUsedFallback && sheetStatus === "ready" && (
           <Alert className="mb-6" variant="default">
             <AlertTitle>Using default pricing</AlertTitle>
             <AlertDescription>
@@ -708,7 +858,7 @@ export default function RoofingCalculator() {
             </AlertDescription>
           </Alert>
         )}
-        {(!cstId || (quotesStatus === "ready" && !chooserOpen)) && (
+        {!searchResults && (!cstId || (quotesStatus === "ready" && !chooserOpen)) && (
         <div className="grid gap-8 lg:grid-cols-[1fr_400px]">
           <div className="flex flex-col gap-8">
             <section>
@@ -1433,6 +1583,93 @@ function ExpandableSummaryRow({
             </div>
           ))}
         </div>
+      )}
+    </div>
+  )
+}
+
+function QuoteSearchResultsView({
+  results,
+  onBack,
+  onOpenQuote,
+  onStartEstimate,
+}: {
+  results: QuoteSearchResults
+  onBack: () => void
+  onOpenQuote: (quote: SavedQuote) => void
+  onStartEstimate: (cstId: string) => void
+}) {
+  const groups = searchResultGroups(results)
+  const quoteCount = results.quotes.length
+  const quoteLabel = quoteCount === 1 ? "quote" : "quotes"
+
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col gap-6">
+      <div className="flex flex-col gap-3">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex w-fit items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ChevronLeft className="size-4" />
+          Back
+        </button>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-lg font-semibold text-foreground">Search results</h2>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            {results.label} · {quoteCount} saved {quoteLabel}
+          </p>
+          {results.customersTruncated && (
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Showing the first 25 customers with this name.
+            </p>
+          )}
+        </div>
+      </div>
+      {groups.length === 0 ? (
+        <p className="rounded-xl border-2 border-border bg-card p-4 text-sm text-muted-foreground">
+          No customers found for {results.label}.
+        </p>
+      ) : (
+        groups.map((group) => (
+          <section key={group.customer.cst_id} className="flex flex-col gap-3">
+            <div className="flex flex-col gap-0.5">
+              <h3 className="font-semibold text-foreground">{customerLabel(group.customer)}</h3>
+              {(`${group.customer.first_name} ${group.customer.last_name}`.trim() || group.customer.cust_number) && (
+                <p className="text-sm text-muted-foreground">
+                  Customer {group.customer.cst_id}
+                  {group.customer.cust_number ? ` · Customer number ${group.customer.cust_number}` : ""}
+                </p>
+              )}
+            </div>
+            {group.quotes.length === 0 ? (
+              <div className="flex flex-col items-start gap-3 rounded-xl border-2 border-border bg-card p-4">
+                <p className="text-sm text-muted-foreground">No saved quotes for this customer.</p>
+                <Button type="button" variant="outline" className="gap-2" onClick={() => onStartEstimate(group.customer.cst_id)}>
+                  <Plus className="size-4" />
+                  Start a new estimate
+                </Button>
+              </div>
+            ) : (
+              group.quotes.map((quote) => (
+                <button
+                  key={quote.id}
+                  type="button"
+                  onClick={() => onOpenQuote(quote)}
+                  className="rounded-xl border-2 border-border bg-card p-4 text-left transition-all hover:border-accent hover:shadow-md"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="font-semibold text-foreground">{quote.roof_type_name}</span>
+                    <span className="font-semibold tabular-nums text-foreground">{formatQuoteMoney(quote.sale_price)}</span>
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {formatQuoteSavedAt(quote.created_at)} · {formatCompactNumber(quote.squares)} squares
+                  </p>
+                </button>
+              ))
+            )}
+          </section>
+        ))
       )}
     </div>
   )
