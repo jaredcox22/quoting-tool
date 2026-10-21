@@ -13,6 +13,7 @@ import { Slider } from "@/components/ui/slider"
 import {
   Ruler,
   RotateCcw,
+  Undo2,
   Layers,
   ChevronLeft,
   ChevronRight,
@@ -34,8 +35,10 @@ import {
   formatQuoteMoney,
   formatQuoteSavedAt,
   loadQuotes,
+  savedQuoteFromSaveBody,
   type SavedQuote,
 } from "@/lib/load-quotes"
+import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import {
   clearPersistedCalculatorState,
@@ -129,12 +132,12 @@ export default function RoofingCalculator() {
   const [formData, setFormData] = useState<FormData>(initialFormData)
   const [hasCedarShake, setHasCedarShake] = useState(false)
   const [savingQuote, setSavingQuote] = useState(false)
-  const [saveMessage, setSaveMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null)
   const [savedQuotes, setSavedQuotes] = useState<SavedQuote[]>([])
   const [quotesStatus, setQuotesStatus] = useState<"loading" | "ready" | "error">(cstId ? "loading" : "ready")
   const [quotesError, setQuotesError] = useState<string | null>(null)
   const [chooserOpen, setChooserOpen] = useState(false)
   const [frozenQuote, setFrozenQuote] = useState<SavedQuote | null>(null)
+  const [sourceQuote, setSourceQuote] = useState<SavedQuote | null>(null)
   const [quoteLoadId, setQuoteLoadId] = useState(0)
 
   const fees = feeConfig ?? defaultFeeConfig
@@ -307,7 +310,7 @@ export default function RoofingCalculator() {
     setSelectedRoofType("vertical-seam")
     setProfitMarginPct(Math.min(fees.goalProfitMarginPct, maxGoalProfitMargin))
     setFrozenQuote(null)
-    setSaveMessage(null)
+    setSourceQuote(null)
     setChooserOpen(false)
     setQuotesStatus("ready")
   }
@@ -318,12 +321,17 @@ export default function RoofingCalculator() {
     setHasCedarShake(quote.has_cedar_shake)
     setProfitMarginPct(quote.profit_margin_pct)
     setFrozenQuote(quote)
-    setSaveMessage(null)
+    setSourceQuote(quote)
     setChooserOpen(false)
   }
 
   const handleReset = () => {
     startNewEstimate()
+  }
+
+  const revertToSavedQuote = () => {
+    if (!sourceQuote) return
+    openSavedQuote(sourceQuote)
   }
 
   const entry = pricingByType?.[selectedRoofType]
@@ -534,15 +542,17 @@ export default function RoofingCalculator() {
       breakdown,
     })
     setSavingQuote(true)
-    setSaveMessage(null)
     void saveQuote(body)
       .then((result) => {
-        setSaveMessage({ tone: "ok", text: `Saved estimate ${result.id}.` })
+        const saved = savedQuoteFromSaveBody(result.id, body)
+        setSourceQuote(saved)
+        setFrozenQuote(saved)
+        toast.success("Saved estimate")
         refreshSavedQuotes()
       })
       .catch((error: unknown) => {
         const text = error instanceof Error ? error.message : "Save failed."
-        setSaveMessage({ tone: "error", text })
+        toast.error(text)
       })
       .finally(() => {
         setSavingQuote(false)
@@ -1092,16 +1102,6 @@ export default function RoofingCalculator() {
                         Open this page with a cst_id from SalesPro to save.
                       </p>
                     )}
-                    {saveMessage && (
-                      <p
-                        className={cn(
-                          "text-xs text-center leading-relaxed",
-                          saveMessage.tone === "error" ? "text-red-600" : "text-muted-foreground",
-                        )}
-                      >
-                        {saveMessage.text}
-                      </p>
-                    )}
                     <Button
                       type="button"
                       variant="outline"
@@ -1117,10 +1117,22 @@ export default function RoofingCalculator() {
                       <Download className="size-4" />
                       Export PDF
                     </Button>
-                    <Button variant="outline" onClick={handleReset} className="w-full gap-2">
+                    <Button type="button" variant="outline" onClick={handleReset} className="w-full gap-2">
                       <RotateCcw className="size-4" />
                       Reset
                     </Button>
+                    {sourceQuote && frozenQuote?.id !== sourceQuote.id && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full gap-2"
+                        title="Restore the measurements and price from the saved quote."
+                        onClick={revertToSavedQuote}
+                      >
+                        <Undo2 className="size-4" />
+                        Revert to saved
+                      </Button>
+                    )}
                   </div>
                 </div>
 

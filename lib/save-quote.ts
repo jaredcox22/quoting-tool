@@ -190,7 +190,9 @@ export function buildSaveQuoteBody(input: {
   }
 }
 
-export async function saveQuote(body: ReturnType<typeof buildSaveQuoteBody>): Promise<SaveQuoteResult> {
+export type SaveQuoteBody = ReturnType<typeof buildSaveQuoteBody>
+
+export async function saveQuote(body: SaveQuoteBody): Promise<SaveQuoteResult> {
   let response: Response
   try {
     response = await fetch(saveQuoteEndpoint(), {
