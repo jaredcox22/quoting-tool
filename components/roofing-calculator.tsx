@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from "react"
-import { useSearchParams } from "next/navigation"
+import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, type FormEvent } from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -13,15 +13,36 @@ import { Slider } from "@/components/ui/slider"
 import {
   Ruler,
   RotateCcw,
+  Undo2,
   Layers,
+  ChevronLeft,
   ChevronRight,
   Download,
   Loader2,
+  Plus,
+  Save,
+  Search,
 } from "lucide-react"
 import type { RoofTypePricing, PricingData, PricingBreakdown, LineItemDetail, FeeConfig } from "@/lib/google-sheets"
 import { defaultPricing, defaultFeeConfig, defaultSheetData, loadSheetDataFromEnv } from "@/lib/google-sheets"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { buildQuoteExportPayload } from "@/lib/quote-export"
+import { buildSaveQuoteBody, saveQuote } from "@/lib/save-quote"
+import {
+  breakdownFromSavedQuote,
+  calculationsFromSavedQuote,
+  feeConfigFromSavedQuote,
+  formDataFromSavedQuote,
+  formatQuoteMoney,
+  formatQuoteSavedAt,
+  loadQuotes,
+  parseQuoteSearch,
+  savedQuoteFromSaveBody,
+  type QuoteCustomer,
+  type QuoteSearchQuery,
+  type SavedQuote,
+} from "@/lib/load-quotes"
+import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import {
   clearPersistedCalculatorState,
@@ -30,7 +51,16 @@ import {
   savePersistedCalculatorState,
 } from "@/lib/roofing-calculator-persist"
 
-type RoofType = "vertical-seam" | "1-slr-panel" | "ultra-2000"
+type RoofType = "vertical-seam" | "1-slr-panel" | "12-accent-panel" | "ultra-2000"
+
+function isRoofType(value: string): value is RoofType {
+  return (
+    value === "vertical-seam" ||
+    value === "1-slr-panel" ||
+    value === "12-accent-panel" ||
+    value === "ultra-2000"
+  )
+}
 
 interface FormData {
   squares: number
@@ -92,9 +122,84 @@ const roofTypes = [
   },
 ]
 
+interface QuoteSearchResults {
+  label: string
+  query: QuoteSearchQuery
+  quotes: SavedQuote[]
+  customers: QuoteCustomer[] | null
+  customersTruncated: boolean
+}
+
+function emptyCustomer(cstId: string): QuoteCustomer {
+  return {
+    cst_id: cstId,
+    first_name: "",
+    last_name: "",
+    address1: "",
+    address2: "",
+    city: "",
+    state: "",
+    zip: "",
+  }
+}
+
+function customerLabel(customer: QuoteCustomer): string {
+  const name = `${customer.first_name} ${customer.last_name}`.trim()
+  return name || `Customer ${customer.cst_id}`
+}
+
+function customerAddress(customer: QuoteCustomer): string {
+  const street = [customer.address1, customer.address2].filter(Boolean).join(", ")
+  const cityState = [customer.city, customer.state].filter(Boolean).join(", ")
+  const cityStateZip = [cityState, customer.zip].filter(Boolean).join(" ")
+  return [street, cityStateZip].filter(Boolean).join(", ")
+}
+
+function searchResultGroups(results: QuoteSearchResults): { customer: QuoteCustomer; quotes: SavedQuote[] }[] {
+  const quotesByCustomer = new Map<string, SavedQuote[]>()
+  for (const quote of results.quotes) {
+    const existing = quotesByCustomer.get(quote.cst_id) ?? []
+    existing.push(quote)
+    quotesByCustomer.set(quote.cst_id, existing)
+  }
+
+  if (results.customers) {
+    const known = new Set(results.customers.map((customer) => customer.cst_id))
+    const groups = results.customers.map((customer) => ({
+      customer,
+      quotes: quotesByCustomer.get(customer.cst_id) ?? [],
+    }))
+    for (const [cstId, quotes] of quotesByCustomer) {
+      if (!known.has(cstId)) {
+        groups.push({
+          customer: emptyCustomer(cstId),
+          quotes,
+        })
+      }
+    }
+    groups.sort((a, b) => {
+      const aHasQuotes = a.quotes.length > 0 ? 0 : 1
+      const bHasQuotes = b.quotes.length > 0 ? 0 : 1
+      return aHasQuotes - bHasQuotes
+    })
+    return groups
+  }
+
+  const cstId = "cstId" in results.query ? results.query.cstId : (results.quotes[0]?.cst_id ?? "")
+  return [
+    {
+      customer: emptyCustomer(cstId),
+      quotes: results.quotes,
+    },
+  ]
+}
+
 export default function RoofingCalculator() {
+  const router = useRouter()
+  const pathname = usePathname()
   const searchParams = useSearchParams()
   const admin = searchParams.get("admin") === "true"
+  const cstId = (searchParams.get("cst_id") ?? "").trim()
 
   const [pricingByType, setPricingByType] = useState<RoofTypePricing>(() => defaultSheetData().pricing)
   const [feeConfig, setFeeConfig] = useState<FeeConfig>(() => defaultFeeConfig)
@@ -104,6 +209,23 @@ export default function RoofingCalculator() {
   const [selectedRoofType, setSelectedRoofType] = useState<RoofType>("vertical-seam")
   const [formData, setFormData] = useState<FormData>(initialFormData)
   const [hasCedarShake, setHasCedarShake] = useState(false)
+  const [savingQuote, setSavingQuote] = useState(false)
+  const [savedQuotes, setSavedQuotes] = useState<SavedQuote[]>([])
+  const [pageCustomer, setPageCustomer] = useState<QuoteCustomer | null>(null)
+  const [quotesStatus, setQuotesStatus] = useState<"loading" | "ready" | "error">(cstId ? "loading" : "ready")
+  const [quotesError, setQuotesError] = useState<string | null>(null)
+  const [chooserOpen, setChooserOpen] = useState(false)
+  const [frozenQuote, setFrozenQuote] = useState<SavedQuote | null>(null)
+  const [sourceQuote, setSourceQuote] = useState<SavedQuote | null>(null)
+  const [quoteLoadId, setQuoteLoadId] = useState(0)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [searchResults, setSearchResults] = useState<QuoteSearchResults | null>(null)
+  const [searchOrigin, setSearchOrigin] = useState<QuoteSearchResults | null>(null)
+  const [pendingCustomerId, setPendingCustomerId] = useState<string | null>(null)
+  const [returningHome, setReturningHome] = useState(false)
+  const skipChooserRef = useRef(false)
 
   const fees = feeConfig ?? defaultFeeConfig
   const maxGoalProfitMargin = Math.max(0, Math.floor(99 - fees.commissionPct))
@@ -112,8 +234,9 @@ export default function RoofingCalculator() {
   )
 
   useEffect(() => {
+    if (frozenQuote) return
     setProfitMarginPct((prev) => Math.min(prev, maxGoalProfitMargin))
-  }, [maxGoalProfitMargin])
+  }, [maxGoalProfitMargin, frozenQuote])
 
   useEffect(() => {
     let cancelled = false
@@ -130,9 +253,10 @@ export default function RoofingCalculator() {
   }, [])
 
   useEffect(() => {
+    if (frozenQuote) return
     const fee = feeConfig ?? defaultFeeConfig
     setProfitMarginPct((prev) => clampProfitMarginToFees(prev, fee))
-  }, [feeConfig])
+  }, [feeConfig, frozenQuote])
 
   useEffect(() => {
     if (formData.layers <= 0 && hasCedarShake) {
@@ -145,6 +269,10 @@ export default function RoofingCalculator() {
   const persistGenerationRef = useRef(0)
 
   useLayoutEffect(() => {
+    if (cstId) {
+      persistReadyRef.current = true
+      return
+    }
     const saved = loadPersistedCalculatorState()
     const fee = feeConfig ?? defaultFeeConfig
     if (saved) {
@@ -154,12 +282,50 @@ export default function RoofingCalculator() {
       setProfitMarginPct(clampProfitMarginToFees(saved.profitMarginPct, fee))
     }
     persistReadyRef.current = true
-    // Intentionally once on mount — avoid re-applying storage when feeConfig updates
+    // Intentionally once on mount — a SalesPro customer loads from the database instead
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
-    if (!persistReadyRef.current) return
+    if (!cstId) {
+      setQuotesStatus("ready")
+      setChooserOpen(false)
+      setSavedQuotes([])
+      setPageCustomer(null)
+      setQuotesError(null)
+      return
+    }
+    let cancelled = false
+    const keepOpenQuote = skipChooserRef.current
+    if (!keepOpenQuote) setQuotesStatus("loading")
+    void loadQuotes({ cstId })
+      .then((result) => {
+        if (cancelled) return
+        setSavedQuotes(result.quotes)
+        setPageCustomer(result.customers?.find((customer) => customer.cst_id === cstId) ?? null)
+        setQuotesError(null)
+        setQuotesStatus("ready")
+        if (skipChooserRef.current) {
+          skipChooserRef.current = false
+          setChooserOpen(false)
+          return
+        }
+        setChooserOpen(result.quotes.length > 0)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        skipChooserRef.current = false
+        setQuotesError(error instanceof Error ? error.message : "Could not load saved quotes.")
+        setQuotesStatus("error")
+        setChooserOpen(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [cstId, quoteLoadId])
+
+  useEffect(() => {
+    if (!persistReadyRef.current || cstId) return
     const slice = {
       selectedRoofType,
       formData,
@@ -172,7 +338,7 @@ export default function RoofingCalculator() {
       savePersistedCalculatorState(slice)
     }, 300)
     return () => window.clearTimeout(id)
-  }, [formData, selectedRoofType, hasCedarShake, profitMarginPct])
+  }, [formData, selectedRoofType, hasCedarShake, profitMarginPct, cstId])
 
   const pageHeaderRef = useRef<HTMLElement | null>(null)
   const [summaryFillsViewport, setSummaryFillsViewport] = useState(false)
@@ -191,6 +357,7 @@ export default function RoofingCalculator() {
   }, [])
 
   const handleInputChange = (field: keyof FormData, value: string) => {
+    setFrozenQuote(null)
     const numValue = value === "" ? 0 : parseFloat(value)
     const safeValue = isNaN(numValue) ? 0 : numValue
 
@@ -231,13 +398,108 @@ export default function RoofingCalculator() {
     })
   }
 
-  const handleReset = () => {
+  const startNewEstimate = () => {
     persistGenerationRef.current += 1
     clearPersistedCalculatorState()
     setFormData(initialFormData)
     setHasCedarShake(false)
     setSelectedRoofType("vertical-seam")
     setProfitMarginPct(Math.min(fees.goalProfitMarginPct, maxGoalProfitMargin))
+    setFrozenQuote(null)
+    setSourceQuote(null)
+    setChooserOpen(false)
+    setQuotesStatus("ready")
+  }
+
+  const openSavedQuote = (quote: SavedQuote) => {
+    setSelectedRoofType(isRoofType(quote.roof_type_id) ? quote.roof_type_id : "vertical-seam")
+    setFormData(formDataFromSavedQuote(quote))
+    setHasCedarShake(quote.has_cedar_shake)
+    setProfitMarginPct(quote.profit_margin_pct)
+    setFrozenQuote(quote)
+    setSourceQuote(quote)
+    setChooserOpen(false)
+    setSearchResults(null)
+  }
+
+  const openCustomer = (customerId: string) => {
+    if (customerId === cstId) return
+    skipChooserRef.current = true
+    setPendingCustomerId(customerId)
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("cst_id", customerId)
+    router.replace(`?${params.toString()}`)
+  }
+
+  useEffect(() => {
+    if (pendingCustomerId && cstId === pendingCustomerId) {
+      setPendingCustomerId(null)
+    }
+  }, [cstId, pendingCustomerId])
+
+  useEffect(() => {
+    if (returningHome && !cstId) setReturningHome(false)
+  }, [cstId, returningHome])
+
+  const leaveSearchResults = () => {
+    setSearchResults(null)
+    setSearchOrigin(null)
+    setChooserOpen(false)
+    setReturningHome(true)
+    const params = new URLSearchParams(searchParams.toString())
+    params.delete("cst_id")
+    const query = params.toString()
+    router.replace(query ? `${pathname}?${query}` : pathname)
+  }
+
+  const openCustomerQuote = (quote: SavedQuote) => {
+    setSearchResults(null)
+    openCustomer(quote.cst_id)
+    openSavedQuote(quote)
+  }
+
+  const startEstimateForCustomer = (customerId: string) => {
+    if (searchResults) setSearchOrigin(searchResults)
+    setSearchResults(null)
+    openCustomer(customerId)
+    startNewEstimate()
+  }
+
+  const handleQuoteSearch = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const parsed = parseQuoteSearch(searchQuery)
+    if ("error" in parsed) {
+      setSearchError(parsed.error)
+      return
+    }
+    const label = "name" in parsed ? parsed.name : `Customer ${parsed.cstId}`
+    setSearching(true)
+    setSearchError(null)
+    void loadQuotes(parsed)
+      .then((result) => {
+        setSearchResults({
+          label,
+          query: parsed,
+          quotes: result.quotes,
+          customers: result.customers,
+          customersTruncated: result.customersTruncated,
+        })
+      })
+      .catch((error: unknown) => {
+        setSearchError(error instanceof Error ? error.message : "Could not search quotes.")
+      })
+      .finally(() => {
+        setSearching(false)
+      })
+  }
+
+  const handleReset = () => {
+    startNewEstimate()
+  }
+
+  const revertToSavedQuote = () => {
+    if (!sourceQuote) return
+    openSavedQuote(sourceQuote)
   }
 
   const entry = pricingByType?.[selectedRoofType]
@@ -409,23 +671,92 @@ export default function RoofingCalculator() {
       profit,
       salePrice,
     }
-  }, [formData, pricing, fees, profitMarginPct])
+  }, [formData, pricing, breakdown, fees, profitMarginPct, hasCedarShake])
+
+  const summaryFees = frozenQuote ? feeConfigFromSavedQuote(frozenQuote) : fees
+  const summaryBreakdown = frozenQuote ? breakdownFromSavedQuote(frozenQuote) : breakdown
+  const summaryCalculations = frozenQuote ? calculationsFromSavedQuote(frozenQuote) : calculations
+  const summaryPipeItems = summaryBreakdown.pipeFlashingRate ?? []
+  const summaryPipeLabelUpTo6 = summaryPipeItems.find((item) => item.name.toLowerCase().includes("up to 6"))?.name ?? pipeLabelUpTo6
+  const summaryPipeLabelUpTo13 = summaryPipeItems.find((item) => item.name.toLowerCase().includes("up to 13"))?.name ?? pipeLabelUpTo13
+  const summaryPipeLabelUpTo19 = summaryPipeItems.find((item) => item.name.toLowerCase().includes("up to 19"))?.name ?? pipeLabelUpTo19
+  const marginMax = frozenQuote
+    ? Math.max(0, Math.floor(99 - summaryFees.commissionPct), Math.ceil(profitMarginPct))
+    : maxGoalProfitMargin
+
+  const refreshSavedQuotes = useCallback(() => {
+    if (!cstId) return
+    void loadQuotes({ cstId })
+      .then((result) => {
+        setSavedQuotes(result.quotes)
+      })
+      .catch(() => {
+        // The estimate is already saved. The list refreshes the next time the page opens.
+      })
+  }, [cstId])
+
+  const handleSaveQuote = useCallback(() => {
+    if (!cstId || savingQuote || sheetStatus !== "ready" || frozenQuote) return
+    const roofTypeName = roofTypes.find((t) => t.id === selectedRoofType)?.name ?? selectedRoofType
+    const body = buildSaveQuoteBody({
+      cstId,
+      roofTypeId: selectedRoofType,
+      roofTypeName,
+      formData,
+      hasCedarShake,
+      profitMarginPct,
+      fees,
+      calculations,
+      breakdown,
+    })
+    setSavingQuote(true)
+    void saveQuote(body)
+      .then((result) => {
+        const saved = savedQuoteFromSaveBody(result.id, body)
+        setSourceQuote(saved)
+        setFrozenQuote(saved)
+        toast.success("Saved estimate")
+        refreshSavedQuotes()
+      })
+      .catch((error: unknown) => {
+        const text = error instanceof Error ? error.message : "Save failed."
+        toast.error(text)
+      })
+      .finally(() => {
+        setSavingQuote(false)
+      })
+  }, [
+    cstId,
+    savingQuote,
+    sheetStatus,
+    selectedRoofType,
+    formData,
+    hasCedarShake,
+    profitMarginPct,
+    fees,
+    calculations,
+    breakdown,
+    refreshSavedQuotes,
+    frozenQuote,
+  ])
 
   const handleExportPdf = useCallback(() => {
-    const roofTypeName = roofTypes.find((t) => t.id === selectedRoofType)?.name ?? selectedRoofType
+    const roofTypeName = frozenQuote?.roof_type_name
+      ?? roofTypes.find((t) => t.id === selectedRoofType)?.name
+      ?? selectedRoofType
     const payload = buildQuoteExportPayload({
       roofTypeId: selectedRoofType,
       roofTypeName,
       formData,
       hasCedarShake,
-      calculations,
-      breakdown,
-      fees,
+      calculations: summaryCalculations,
+      breakdown: summaryBreakdown,
+      fees: summaryFees,
       profitMarginPct,
       pipeLabels: {
-        upTo6: pipeLabelUpTo6,
-        upTo13: pipeLabelUpTo13,
-        upTo19: pipeLabelUpTo19,
+        upTo6: summaryPipeLabelUpTo6,
+        upTo13: summaryPipeLabelUpTo13,
+        upTo19: summaryPipeLabelUpTo19,
       },
     })
     void import("@/lib/quote-export-pdf").then(({ exportQuoteToPdf }) => {
@@ -437,13 +768,14 @@ export default function RoofingCalculator() {
     selectedRoofType,
     formData,
     hasCedarShake,
-    calculations,
-    breakdown,
-    fees,
+    summaryCalculations,
+    summaryBreakdown,
+    summaryFees,
     profitMarginPct,
-    pipeLabelUpTo6,
-    pipeLabelUpTo13,
-    pipeLabelUpTo19,
+    summaryPipeLabelUpTo6,
+    summaryPipeLabelUpTo13,
+    summaryPipeLabelUpTo19,
+    frozenQuote,
   ])
 
   const formatCurrency = (value: number) => {
@@ -457,7 +789,7 @@ export default function RoofingCalculator() {
 
   return (
     <div className="relative min-h-screen bg-background">
-      {sheetStatus === "loading" && (
+      {sheetStatus === "loading" && !searchResults && !returningHome && !!cstId && quotesStatus === "ready" && !chooserOpen && (
         <div
           className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background/80 backdrop-blur-sm"
           aria-busy="true"
@@ -469,7 +801,7 @@ export default function RoofingCalculator() {
       )}
       <header ref={pageHeaderRef} className="border-b bg-card">
         <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-3">
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl text-balance">
@@ -480,12 +812,115 @@ export default function RoofingCalculator() {
                 Generate a fast, professional estimate for standing seam metal roofing systems.
               </p>
             </div>
+            {((cstId && !returningHome) || searchResults) && (
+              <QuoteSearchForm
+                id="quote-search"
+                query={searchQuery}
+                searching={searching}
+                error={searchError}
+                onQueryChange={setSearchQuery}
+                onSubmit={handleQuoteSearch}
+                className="w-full max-w-md"
+              />
+            )}
           </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        {sheetUsedFallback && sheetStatus === "ready" && (
+        {searchResults && (
+          <QuoteSearchResultsView
+            results={searchResults}
+            onBack={leaveSearchResults}
+            onOpenQuote={openCustomerQuote}
+            onStartEstimate={startEstimateForCustomer}
+          />
+        )}
+        {!searchResults && !returningHome && cstId && quotesStatus === "loading" && (
+          <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3" aria-busy="true">
+            <Loader2 className="size-10 animate-spin text-muted-foreground" aria-hidden />
+            <p className="text-sm text-muted-foreground">Loading saved quotes…</p>
+          </div>
+        )}
+        {!searchResults && !returningHome && cstId && quotesStatus === "error" && (
+          <div className="mx-auto flex min-h-[40vh] max-w-lg flex-col items-center justify-center gap-4 text-center">
+            <p className="text-sm text-red-600">{quotesError ?? "Could not load saved quotes."}</p>
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <Button type="button" onClick={() => setQuoteLoadId((id) => id + 1)}>
+                Try again
+              </Button>
+              <Button type="button" variant="outline" onClick={startNewEstimate}>
+                Start a new estimate
+              </Button>
+            </div>
+          </div>
+        )}
+        {!searchResults && !returningHome && chooserOpen && quotesStatus === "ready" && (
+          <div className="mx-auto flex max-w-2xl flex-col gap-6">
+            <div className="flex flex-col gap-1">
+              <h2 className="text-lg font-semibold text-foreground">
+                {pageCustomer && `${pageCustomer.first_name} ${pageCustomer.last_name}`.trim()
+                  ? customerLabel(pageCustomer)
+                  : `Customer ${cstId}`}
+              </h2>
+              {pageCustomer && `${pageCustomer.first_name} ${pageCustomer.last_name}`.trim() && (
+                <p className="text-sm text-muted-foreground">Customer {cstId}</p>
+              )}
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Start a new estimate, or open a saved quote. A saved quote stays as it was until you change it and save again.
+              </p>
+            </div>
+            <Button type="button" className="w-full gap-2" onClick={startNewEstimate}>
+              <Plus className="size-4" />
+              Start a new estimate
+            </Button>
+            <div className="flex flex-col gap-3">
+              {savedQuotes.map((quote) => (
+                <button
+                  key={quote.id}
+                  type="button"
+                  onClick={() => openSavedQuote(quote)}
+                  className="rounded-xl border-2 border-border bg-card p-4 text-left transition-all hover:border-accent hover:shadow-md"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="font-semibold text-foreground">{quote.roof_type_name}</span>
+                    <span className="font-semibold tabular-nums text-foreground">{formatQuoteMoney(quote.sale_price)}</span>
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {formatQuoteSavedAt(quote.created_at)} · {formatCompactNumber(quote.squares)} squares
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {!searchResults && !cstId && pendingCustomerId && (
+          <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3" aria-busy="true">
+            <Loader2 className="size-10 animate-spin text-muted-foreground" aria-hidden />
+            <p className="text-sm text-muted-foreground">Opening customer…</p>
+          </div>
+        )}
+        {!searchResults && !pendingCustomerId && (!cstId || returningHome) && (
+          <div className="mx-auto flex min-h-[calc(100vh-14rem)] max-w-xl flex-col justify-center">
+            <div className="rounded-xl border-2 border-border bg-card p-6 shadow-lg sm:p-8">
+              <h2 className="text-xl font-semibold tracking-tight text-foreground">Start an estimate</h2>
+              <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
+                Search for a customer by name, id, or address. Open a saved quote, or start a new estimate for that customer.
+              </p>
+              <QuoteSearchForm
+                id="quote-search-start"
+                query={searchQuery}
+                searching={searching}
+                error={searchError}
+                onQueryChange={setSearchQuery}
+                onSubmit={handleQuoteSearch}
+                autoFocus
+                className="mt-6"
+              />
+            </div>
+          </div>
+        )}
+        {!searchResults && !returningHome && cstId && quotesStatus === "ready" && !chooserOpen && sheetUsedFallback && sheetStatus === "ready" && (
           <Alert className="mb-6" variant="default">
             <AlertTitle>Using default pricing</AlertTitle>
             <AlertDescription>
@@ -493,7 +928,31 @@ export default function RoofingCalculator() {
             </AlertDescription>
           </Alert>
         )}
+        {!searchResults && !returningHome && cstId && quotesStatus === "ready" && !chooserOpen && (
         <div className="grid gap-8 lg:grid-cols-[1fr_400px]">
+          {(searchOrigin || savedQuotes.length > 0) && (
+            <div className="lg:col-span-2">
+              {searchOrigin ? (
+                <button
+                  type="button"
+                  onClick={() => setSearchResults(searchOrigin)}
+                  className="inline-flex w-fit items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ChevronLeft className="size-4" />
+                  Search results
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setChooserOpen(true)}
+                  className="inline-flex w-fit items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ChevronLeft className="size-4" />
+                  Saved quotes
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex flex-col gap-8">
             <section>
               <div className="mb-4 flex items-center gap-2">
@@ -504,7 +963,10 @@ export default function RoofingCalculator() {
                 {roofTypes.map((type) => (
                   <button
                     key={type.id}
-                    onClick={() => setSelectedRoofType(type.id)}
+                    onClick={() => {
+                      if (type.id !== selectedRoofType) setFrozenQuote(null)
+                      setSelectedRoofType(type.id)
+                    }}
                     className={`group relative rounded-xl border-2 p-4 text-left transition-all hover:border-accent hover:shadow-md ${
                       selectedRoofType === type.id
                         ? "border-accent bg-accent/5 shadow-md"
@@ -657,6 +1119,7 @@ export default function RoofingCalculator() {
                         id="hasCedarShake"
                         checked={hasCedarShake}
                         onCheckedChange={(checked) => {
+                          setFrozenQuote(null)
                           const enabled = checked === true && formData.layers > 0
                           setHasCedarShake(enabled)
                           if (!enabled) {
@@ -704,7 +1167,7 @@ export default function RoofingCalculator() {
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-lg">Estimate Summary</CardTitle>
                   <Badge variant="outline" className="text-xs">
-                    {roofTypes.find((t) => t.id === selectedRoofType)?.name}
+                    {frozenQuote?.roof_type_name ?? roofTypes.find((t) => t.id === selectedRoofType)?.name ?? selectedRoofType}
                   </Badge>
                 </div>
               </CardHeader>
@@ -712,14 +1175,14 @@ export default function RoofingCalculator() {
                 <div className="flex flex-col gap-6 px-6 pb-4 md:min-h-0 md:flex-1 md:overflow-y-auto">
                   {admin && (
                     <>
-                      <BreakdownSection calculations={calculations} breakdown={breakdown} />
+                      <BreakdownSection calculations={summaryCalculations} breakdown={summaryBreakdown} />
 
                 <Separator />
 
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-foreground">Material Subtotal</span>
                   <span className="text-sm font-semibold text-foreground tabular-nums">
-                    {formatCurrency(calculations.materialSubtotal)}
+                    {formatCurrency(summaryCalculations.materialSubtotal)}
                   </span>
                 </div>
 
@@ -727,13 +1190,13 @@ export default function RoofingCalculator() {
                   <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-1">
                     Fees & Adjustments
                   </h3>
-                  <FeeRow label="Sub Labor" value={calculations.subLabor}>
-                    <FeeDetail label={`Panels (${formatCompactNumber(formData.squares)} sq × ${formatCurrency(fees.subLaborPerSquare)})`} value={calculations.subLaborPanels} />
-                    <FeeDetail label={`Ridge (${formatCompactNumber(formData.ridgeLength)} ft × ${formatCurrency(fees.subLaborPerRidgeFt)})`} value={calculations.subLaborRidge} />
+                  <FeeRow label="Sub Labor" value={summaryCalculations.subLabor}>
+                    <FeeDetail label={`Panels (${formatCompactNumber(formData.squares)} sq × ${formatCurrency(summaryFees.subLaborPerSquare)})`} value={summaryCalculations.subLaborPanels} />
+                    <FeeDetail label={`Ridge (${formatCompactNumber(formData.ridgeLength)} ft × ${formatCurrency(summaryFees.subLaborPerRidgeFt)})`} value={summaryCalculations.subLaborRidge} />
                   </FeeRow>
                   <FeeRow
-                    label={`Dumpster Fee${calculations.dumpsterSquaresForTier > 0 ? ` (${formatCompactNumber(calculations.dumpsterSquaresForTier)} sq)` : ""}`}
-                    value={calculations.dumpsterFee}
+                    label={`Dumpster Fee${summaryCalculations.dumpsterSquaresForTier > 0 ? ` (${formatCompactNumber(summaryCalculations.dumpsterSquaresForTier)} sq)` : ""}`}
+                    value={summaryCalculations.dumpsterFee}
                   >
                     <div className="flex items-baseline justify-between gap-3 py-0.5 text-xs">
                       <span className="text-muted-foreground/80 truncate min-w-0">Base Squares</span>
@@ -758,15 +1221,15 @@ export default function RoofingCalculator() {
                     <div className="flex items-baseline justify-between gap-3 py-0.5 text-xs">
                       <span className="text-muted-foreground/80 truncate min-w-0">Weighted Squares</span>
                       <span className="text-muted-foreground/80 font-medium shrink-0 tabular-nums">
-                        {formatCompactNumber(formData.squares)} × {formatCompactNumber(calculations.weightedLayers)} = {formatCompactNumber(calculations.dumpsterSquaresForTier)} sq
+                        {formatCompactNumber(formData.squares)} × {formatCompactNumber(summaryCalculations.weightedLayers)} = {formatCompactNumber(summaryCalculations.dumpsterSquaresForTier)} sq
                       </span>
                     </div>
-                    <FeeDetail label="Applied Dumpster Tier" value={calculations.dumpsterFee} />
+                    <FeeDetail label="Applied Dumpster Tier" value={summaryCalculations.dumpsterFee} />
                   </FeeRow>
-                  <FeeRow label="Satellite" value={fees.satellite} />
-                  <FeeRow label="Permits" value={fees.permits} />
-                  <FeeRow label={`Financing (${formatCompactNumber(fees.financingPct)}%)`} value={calculations.financing} />
-                  <FeeRow label={`Sales Tax (${formatCompactNumber(fees.salesTaxPct)}%)`} value={calculations.salesTax} />
+                  <FeeRow label="Satellite" value={summaryFees.satellite} />
+                  <FeeRow label="Permits" value={summaryFees.permits} />
+                  <FeeRow label={`Financing (${formatCompactNumber(summaryFees.financingPct)}%)`} value={summaryCalculations.financing} />
+                  <FeeRow label={`Sales Tax (${formatCompactNumber(summaryFees.salesTaxPct)}%)`} value={summaryCalculations.salesTax} />
                 </div>
 
                 <Separator />
@@ -774,7 +1237,7 @@ export default function RoofingCalculator() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-muted-foreground">Total Fees & Adjustments</span>
                   <span className="text-sm text-muted-foreground tabular-nums">
-                    {formatCurrency(calculations.totalHardCosts)}
+                    {formatCurrency(summaryCalculations.totalHardCosts)}
                   </span>
                 </div>
 
@@ -790,12 +1253,15 @@ export default function RoofingCalculator() {
                         id="profitMarginInput"
                         type="number"
                         min={0}
-                          max={maxGoalProfitMargin}
+                          max={marginMax}
                         step={1}
                         value={profitMarginPct}
                         onChange={(e) => {
                           const v = parseFloat(e.target.value)
-                            if (!isNaN(v) && v >= 0 && v <= maxGoalProfitMargin) setProfitMarginPct(v)
+                            if (!isNaN(v) && v >= 0 && v <= marginMax) {
+                              if (v !== profitMarginPct) setFrozenQuote(null)
+                              setProfitMarginPct(v)
+                            }
                         }}
                         className="w-20 h-8 text-right text-sm tabular-nums"
                       />
@@ -805,10 +1271,13 @@ export default function RoofingCalculator() {
                   <Slider
                     id="profitMargin"
                     min={0}
-                      max={maxGoalProfitMargin}
+                      max={marginMax}
                     step={1}
                     value={[profitMarginPct]}
-                    onValueChange={([v]) => setProfitMarginPct(v)}
+                    onValueChange={([v]) => {
+                      if (v !== profitMarginPct) setFrozenQuote(null)
+                      setProfitMarginPct(v)
+                    }}
                     className="w-full"
                   />
                 </div>
@@ -816,21 +1285,21 @@ export default function RoofingCalculator() {
                 <div className="flex flex-col gap-1.5 mt-1">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">
-                      Commission ({formatCompactNumber(fees.commissionPct)}%)
+                      Commission ({formatCompactNumber(summaryFees.commissionPct)}%)
                     </span>
                     <span className="text-sm text-muted-foreground tabular-nums">
-                      {formatCurrency(calculations.commission)}
+                      {formatCurrency(summaryCalculations.commission)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Expected Profit</span>
-                    <span className={`text-sm font-semibold tabular-nums ${calculations.profit >= 0 ? "text-green-600" : "text-red-500"}`}>
-                      {formatCurrency(calculations.profit)}
+                    <span className={`text-sm font-semibold tabular-nums ${summaryCalculations.profit >= 0 ? "text-green-600" : "text-red-500"}`}>
+                      {formatCurrency(summaryCalculations.profit)}
                     </span>
                   </div>
                 </div>
 
-                  {calculations.invalidMarginTarget && (
+                  {summaryCalculations.invalidMarginTarget && (
                     <p className="text-xs text-amber-600">
                       Goal Profit Margin + Commission + Financing must be below 100%. Lower the margin target to see a valid sale price.
                     </p>
@@ -847,11 +1316,32 @@ export default function RoofingCalculator() {
                   <div className="flex flex-col gap-2">
                     <Button
                       type="button"
+                      className="w-full gap-2"
+                      disabled={!cstId || savingQuote || sheetStatus !== "ready" || frozenQuote !== null}
+                      title={
+                        !cstId
+                          ? "Open this page with a cst_id from SalesPro to save."
+                          : frozenQuote
+                            ? "Change the estimate to save it as a new quote."
+                            : undefined
+                      }
+                      onClick={handleSaveQuote}
+                    >
+                      {savingQuote ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                      {savingQuote ? "Saving…" : "Save quote"}
+                    </Button>
+                    {!cstId && (
+                      <p className="text-xs text-muted-foreground text-center leading-relaxed">
+                        Open this page with a cst_id from SalesPro to save.
+                      </p>
+                    )}
+                    <Button
+                      type="button"
                       variant="outline"
                       className="w-full gap-2"
-                      disabled={calculations.invalidMarginTarget}
+                      disabled={summaryCalculations.invalidMarginTarget}
                       title={
-                        calculations.invalidMarginTarget
+                        summaryCalculations.invalidMarginTarget
                           ? "Lower goal profit margin so sale price is valid before exporting."
                           : undefined
                       }
@@ -860,10 +1350,22 @@ export default function RoofingCalculator() {
                       <Download className="size-4" />
                       Export PDF
                     </Button>
-                    <Button variant="outline" onClick={handleReset} className="w-full gap-2">
+                    <Button type="button" variant="outline" onClick={handleReset} className="w-full gap-2">
                       <RotateCcw className="size-4" />
                       Reset
                     </Button>
+                    {sourceQuote && frozenQuote?.id !== sourceQuote.id && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full gap-2"
+                        title="Restore the measurements and price from the saved quote."
+                        onClick={revertToSavedQuote}
+                      >
+                        <Undo2 className="size-4" />
+                        Revert to saved
+                      </Button>
+                    )}
                   </div>
                 </div>
 
@@ -872,7 +1374,7 @@ export default function RoofingCalculator() {
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-primary-foreground">Sale Price</span>
                       <span className="text-2xl font-bold text-primary-foreground">
-                        {formatCurrency(calculations.salePrice)}
+                        {formatCurrency(summaryCalculations.salePrice)}
                       </span>
                     </div>
                   </div>
@@ -881,6 +1383,7 @@ export default function RoofingCalculator() {
             </Card>
           </div>
         </div>
+        )}
       </main>
     </div>
   )
@@ -1163,6 +1666,135 @@ function ExpandableSummaryRow({
             </div>
           ))}
         </div>
+      )}
+    </div>
+  )
+}
+
+function QuoteSearchForm({
+  id,
+  query,
+  searching,
+  error,
+  onQueryChange,
+  onSubmit,
+  autoFocus = false,
+  className,
+}: {
+  id: string
+  query: string
+  searching: boolean
+  error: string | null
+  onQueryChange: (value: string) => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+  autoFocus?: boolean
+  className?: string
+}) {
+  return (
+    <form onSubmit={onSubmit} className={cn("flex flex-col gap-1.5", className)}>
+      <Label htmlFor={id} className="sr-only">
+        Search quotes
+      </Label>
+      <div className="flex gap-2">
+        <Input
+          id={id}
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder="Customer id, name, or address"
+          autoComplete="off"
+          autoFocus={autoFocus}
+          disabled={searching}
+        />
+        <Button type="submit" className="shrink-0 gap-2" disabled={searching}>
+          {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+          Search
+        </Button>
+      </div>
+      {error && <p className="text-xs leading-relaxed text-red-600">{error}</p>}
+    </form>
+  )
+}
+
+function QuoteSearchResultsView({
+  results,
+  onBack,
+  onOpenQuote,
+  onStartEstimate,
+}: {
+  results: QuoteSearchResults
+  onBack: () => void
+  onOpenQuote: (quote: SavedQuote) => void
+  onStartEstimate: (cstId: string) => void
+}) {
+  const groups = searchResultGroups(results)
+  const quoteCount = results.quotes.length
+  const quoteLabel = quoteCount === 1 ? "quote" : "quotes"
+
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col gap-6">
+      <div className="flex flex-col gap-3">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex w-fit items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ChevronLeft className="size-4" />
+          Back
+        </button>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-lg font-semibold text-foreground">Search results</h2>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            {results.label} · {quoteCount} saved {quoteLabel}
+          </p>
+          {results.customersTruncated && (
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Showing the first 25 customers with this name.
+            </p>
+          )}
+        </div>
+      </div>
+      {groups.length === 0 ? (
+        <p className="rounded-xl border-2 border-border bg-card p-4 text-sm text-muted-foreground">
+          No customers found for {results.label}.
+        </p>
+      ) : (
+        groups.map((group) => (
+          <section key={group.customer.cst_id} className="flex flex-col gap-3">
+            <div className="flex flex-col gap-0.5">
+              <h3 className="font-semibold text-foreground">{customerLabel(group.customer)}</h3>
+              {`${group.customer.first_name} ${group.customer.last_name}`.trim() && (
+                <p className="text-sm text-muted-foreground">Customer {group.customer.cst_id}</p>
+              )}
+              {customerAddress(group.customer) && (
+                <p className="text-sm text-muted-foreground">{customerAddress(group.customer)}</p>
+              )}
+            </div>
+            <Button type="button" className="w-full gap-2" onClick={() => onStartEstimate(group.customer.cst_id)}>
+              <Plus className="size-4" />
+              Start a new estimate
+            </Button>
+            {group.quotes.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No saved quotes for this customer.</p>
+            ) : (
+              group.quotes.map((quote) => (
+                <button
+                  key={quote.id}
+                  type="button"
+                  onClick={() => onOpenQuote(quote)}
+                  className="rounded-xl border-2 border-border bg-card p-4 text-left transition-all hover:border-accent hover:shadow-md"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="font-semibold text-foreground">{quote.roof_type_name}</span>
+                    <span className="font-semibold tabular-nums text-foreground">{formatQuoteMoney(quote.sale_price)}</span>
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {formatQuoteSavedAt(quote.created_at)} · {formatCompactNumber(quote.squares)} squares
+                  </p>
+                </button>
+              ))
+            )}
+          </section>
+        ))
       )}
     </div>
   )
